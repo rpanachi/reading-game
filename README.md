@@ -44,6 +44,23 @@ em uso aparece ao lado. O serviço Edge TTS por WebSocket (usado no projeto
 reels-generator) recusa conexões vindas de páginas web (HTTP 403 para
 qualquer Origin de navegador), por isso ele só funcionaria com um proxy.
 
+## Publicação (GitHub Pages)
+
+O site está publicado em <https://blog.rpanachi.com/reading-game/> pelo
+GitHub Pages, direto da branch `main` (pasta raiz), sem etapa de build:
+todo push em `main` atualiza o site em cerca de um minuto. O arquivo
+`.nojekyll` diz ao GitHub para servir os arquivos como estão.
+
+## Testes
+
+```bash
+node tests/run.js
+```
+
+Roda sem navegador: gera todas as combinações de história, desenha as
+cenas, e confere a comparação fonética e o acompanhamento da leitura nos
+cenários que já travaram.
+
 ## Estrutura
 
 | Arquivo | O que faz |
