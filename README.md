@@ -46,10 +46,12 @@ qualquer Origin de navegador), por isso ele só funcionaria com um proxy.
 
 ## Publicação (GitHub Pages)
 
-O site está publicado em <https://blog.rpanachi.com/reading-game/> pelo
+O site está publicado em <https://reading-game.rpanachi.com/> pelo
 GitHub Pages, direto da branch `main` (pasta raiz), sem etapa de build:
 todo push em `main` atualiza o site em cerca de um minuto. O arquivo
-`.nojekyll` diz ao GitHub para servir os arquivos como estão.
+`.nojekyll` diz ao GitHub para servir os arquivos como estão e o arquivo
+`CNAME` define o domínio (no DNS, `reading-game` é um CNAME para
+`rpanachi.github.io`). O microfone só funciona em HTTPS.
 
 ## Testes
 
