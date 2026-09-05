@@ -6,7 +6,7 @@
   const $$ = (s) => Array.from(document.querySelectorAll(s));
   const D = window.GAME_DATA;
   const VOICES = { francisca: { label: 'feminina', gender: 'f' }, antonio: { label: 'masculina', gender: 'm' } };
-  const APP_VERSION = '5'; // aparece no rodapé da página de leitura; suba junto com o ?v= do index.html
+  const APP_VERSION = '6'; // aparece no rodapé da página de leitura; suba junto com o ?v= do index.html
 
   const state = {
     sel: { character: null, vehicle: null, place: null, situation: null, dialog: null, ending: null },
@@ -113,8 +113,14 @@
       const r = state.tracker.update(finals, interims);
       if (state.speaking) return;
       // "Ouvi: …" mostra o que o reconhecedor entendeu (útil para diagnosticar);
-      // "…" no fim significa resultado parcial, ainda em revisão.
-      if (lastText) $('#heard').textContent = `Ouvi: “${lastText}”${lastIsFinal ? '' : ' …'}`;
+      // "…" no fim significa resultado parcial, ainda em revisão. Quando a
+      // interpretação difere do texto cru (ex.: "1" → "um"), ela aparece também.
+      if (lastText) {
+        const words = lastText.split(/\s+/).map(SPEECH.normalize).filter(Boolean).join(' ');
+        const raw = lastText.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim();
+        const interp = words && words !== raw.normalize('NFD').replace(/[\u0300-\u036f]/g, '') ? ` = ${words}` : '';
+        $('#heard').textContent = `Ouvi: “${lastText}”${interp}${lastIsFinal ? '' : ' …'}`;
+      }
       if (r.advanced) {
         setProgress(state.tracker.progress);
         state.missFinals = 0;
@@ -134,6 +140,7 @@
     },
     onState(s) {
       state.listening = s === 'listening';
+      if (state.listening) meter.start();   // microfone já liberado: liga o medidor visual
       updateMicUI();
       setStatus();
     },
@@ -158,7 +165,6 @@
     if (!SPEECH.supported) return;
     audio.ensure();
     listener.start();
-    meter.start();
     $('#notice').hidden = true;
     setStatus('Ligando o microfone...');
   }
@@ -258,8 +264,9 @@
     state.startedAt = Date.now();
     showScreen('read');
     goToSlide(0);
+    // Escutar é o padrão ao abrir a história; se o microfone falhar, o
+    // onError liga o modo toque e explica o motivo.
     if (!SPEECH.supported) enableTouchMode(true, 'unsupported');
-    else if (state.micDenied) enableTouchMode(true, 'not-allowed');
     else startListening();
   }
 
@@ -386,7 +393,7 @@
     state.startedAt = Date.now();
     showScreen('read');
     goToSlide(0);
-    if (SPEECH.supported && !state.micDenied && !state.touchMode) startListening();
+    if (SPEECH.supported) startListening();
   }
 
   function backToCompose() {

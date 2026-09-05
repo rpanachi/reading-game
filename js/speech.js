@@ -83,8 +83,12 @@ window.SPEECH = (function () {
    * ("de" → "D"), então uma letra igual à inicial de uma palavra de até
    * 2 letras também vale.
    */
+  // Números: o reconhecedor devolve "1" tanto para "um" quanto para "uma".
+  const NUM_EQUIV = { um: 'uma', uma: 'um', dois: 'duas', duas: 'dois' };
+
   function similar(a, b) {
     if (a === b) return true;
+    if (NUM_EQUIV[a] === b) return true;
     const pa = key(a), pb = key(b);
     if (pa && pa === pb) return true;
     const L = Math.max(pa.length, pb.length);
@@ -99,11 +103,11 @@ window.SPEECH = (function () {
 
   /**
    * Avança pelo texto-alvo com as palavras faladas.
-   * - lookahead: permite pular até 2 palavras não entendidas ("o", "e", "de");
+   * - lookahead 2: permite pular no máximo 1 palavra não entendida ("o", "e", "de");
    * - junta 2 ou 3 pedaços falados para leitura silabada ("ca cho rro").
    * Retorna o índice da próxima palavra a ler.
    */
-  function matchProgress(target, spoken, start = 0, lookahead = 3) {
+  function matchProgress(target, spoken, start = 0, lookahead = 2) {
     let t = start;
     for (let i = 0; i < spoken.length && t < target.length; i++) {
       const limit = Math.min(t + lookahead, target.length);
@@ -272,7 +276,10 @@ window.SPEECH = (function () {
       if (!this.active) return;
       const rec = new SR();
       rec.lang = 'pt-BR';
-      rec.continuous = true;
+      // Um enunciado por vez: a sessão termina na primeira pausa, com o
+      // resultado final imediato, e recomeça na hora sem o contexto anterior.
+      // Assim cada palavra (ou trecho curto) é reconhecida de forma independente.
+      rec.continuous = false;
       rec.interimResults = true;
       rec.maxAlternatives = 5;
       this._nextFinal = 0;
@@ -313,18 +320,17 @@ window.SPEECH = (function () {
     }
 
     /**
-     * Vigia (1x por segundo): se há voz no microfone (ou o reconhecedor avisou
-     * que ouviu fala) e nenhum resultado chega, a sessão travou: reinicia.
+     * Vigia (1x por segundo): se o próprio reconhecedor avisou que ouviu fala
+     * e nenhum resultado chega em 6s, a sessão travou: reinicia. O medidor
+     * local do microfone é só indicador visual (ruído de fundo não reinicia).
      * Sessões muito longas também são renovadas, num momento de silêncio.
      */
     _check() {
       if (!this.active || !this.rec) return;
       const now = Date.now();
       const silentFor = now - this._lastResult;
-      const voiced = this.meter ? this.meter.voicedMs : 0;
-      if ((voiced > 2500 && silentFor > 4000) || (this._speechAt && now - this._speechAt > 5000)) { this.restart('travou'); return; }
-      const quiet = !this._speechAt && (!this.meter || this.meter.level < 0.04);
-      if (now - this._startedAt > 120000 && quiet && silentFor > 4000) this.restart('renovação');
+      if (this._speechAt && now - this._speechAt > 6000) { this.restart('travou'); return; }
+      if (now - this._startedAt > 120000 && !this._speechAt && silentFor > 4000) this.restart('renovação');
     }
 
     restart(reason) {

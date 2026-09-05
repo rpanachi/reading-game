@@ -79,10 +79,12 @@ cenários que já travaram.
 
 1. O texto da página é dividido em palavras normalizadas (minúsculas, sem
    acentos e sem pontuação).
-2. O reconhecimento roda em modo contínuo com resultados parciais e até 5
-   alternativas por trecho. Ao virar a página a sessão não é reiniciada
-   (só os resultados antigos são ignorados), então as primeiras palavras
-   da página nova não se perdem.
+2. O reconhecimento trabalha **um enunciado por vez**: a sessão termina na
+   primeira pausa da fala, com o resultado final na hora e até 5
+   alternativas, e recomeça imediatamente sem o contexto anterior. Assim
+   cada palavra (ou trecho curto) é reconhecida de forma independente e uma
+   nova tentativa depois de um erro é avaliada sem espera. O microfone
+   liga sozinho ao abrir a história.
 3. Cada palavra vira uma **chave fonética do português brasileiro**
    (`phon` em `js/speech.js`): "gato"/"gatu", "chamado"/"xamadu",
    "vez"/"ves", "sol"/"sou", "bem"/"ben", "falar"/"fala" viram a mesma
