@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Minha História — jogo de leitura</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&family=Andika:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css?v=5">
+</head>
+<body>
+
+  <!-- Tela 1: montar a história -->
+  <section id="screen-compose" class="screen active">
+    <header class="hero">
+      <div class="hero-art" id="hero-art"></div>
+      <div class="hero-text">
+        <h1>Minha História</h1>
+        <p>Escolha as partes da história, depois leia em voz alta para virar as páginas!</p>
+      </div>
+    </header>
+    <main id="compose-sections"></main>
+    <footer class="compose-bar">
+      <button id="btn-random" class="btn btn-secondary" type="button">🎲 Surpreenda-me</button>
+      <button id="btn-start" class="btn btn-primary" type="button" disabled>📖 Começar a história!</button>
+    </footer>
+  </section>
+
+  <!-- Tela 2: ler a história -->
+  <section id="screen-read" class="screen">
+    <header class="read-top">
+      <button id="btn-back" class="btn btn-ghost" type="button">← Nova história</button>
+      <div id="dots" class="dots" aria-label="Progresso das páginas"></div>
+      <div id="page-label" class="page-label"></div>
+    </header>
+
+    <div class="book">
+      <div id="scene" class="scene"></div>
+      <div class="page">
+        <p id="reading-text" class="reading-text" aria-live="polite"></p>
+        <div class="controls">
+          <button id="btn-mic" class="mic" type="button" aria-pressed="false" title="Ligar ou desligar o microfone">🎤</button>
+          <div id="vu" class="vu" title="Nível do microfone" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+          <div class="status">
+            <div id="status-line" class="status-line"></div>
+            <div id="heard" class="heard"></div>
+          </div>
+          <button id="btn-listen" class="btn btn-secondary" type="button" title="Ouvir a frase">🔊 Ouvir</button>
+          <button id="btn-next" class="btn btn-primary" type="button" disabled>Próxima página →</button>
+        </div>
+        <div id="hint" class="hint" role="button" hidden></div>
+        <div class="tools">
+          <label class="switch"><input type="checkbox" id="touch-mode"> Modo toque (marcar as palavras tocando nelas)</label>
+          <label class="switch">Voz:
+            <select id="voice" aria-label="Escolher a voz">
+              <option value="francisca">Feminina</option>
+              <option value="antonio">Masculina</option>
+            </select>
+            <span id="tts-engine" class="engine"></span>
+          </label>
+          <button id="btn-skip" class="link" type="button">Pular página</button>
+        </div>
+      </div>
+    </div>
+    <div id="notice" class="notice" hidden></div>
+  </section>
+
+  <!-- Tela 3: fim -->
+  <section id="screen-end" class="screen">
+    <div class="end-card">
+      <div id="end-art" class="end-art"></div>
+      <h2>Parabéns! 🎉</h2>
+      <p class="end-sub">Você leu a história inteira!</p>
+      <div id="end-stats" class="stats"></div>
+      <div class="end-actions">
+        <button id="btn-again" class="btn btn-secondary" type="button">🔁 Ler de novo</button>
+        <button id="btn-new" class="btn btn-primary" type="button">✨ Nova história</button>
+      </div>
+    </div>
+  </section>
+
+  <div id="confetti" class="confetti" aria-hidden="true"></div>
+
+  <!-- ?v= evita que o navegador use uma versão antiga em cache -->
+  <script src="js/data.js?v=5"></script>
+  <script src="js/art.js?v=5"></script>
+  <script src="js/story.js?v=5"></script>
+  <script src="js/speech.js?v=5"></script>
+  <script src="js/app.js?v=5"></script>
+</body>
+</html>
