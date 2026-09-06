@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&family=Andika:wght@400;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/style.css?v=6">
+  <link rel="stylesheet" href="css/style.css?v=10">
 </head>
 <body>
 
@@ -51,7 +51,7 @@
         </div>
         <div id="hint" class="hint" role="button" hidden></div>
         <div class="tools">
-          <label class="switch"><input type="checkbox" id="touch-mode"> Modo toque (marcar as palavras tocando nelas)</label>
+          <button id="btn-diag" class="link" type="button" hidden title="Copia o log detalhado do reconhecimento para colar no chat (só em modo DEBUG)">📋 Copiar diagnóstico</button>
           <label class="switch">Voz:
             <select id="voice" aria-label="Escolher a voz">
               <option value="francisca">Feminina</option>
@@ -83,10 +83,11 @@
   <div id="confetti" class="confetti" aria-hidden="true"></div>
 
   <!-- ?v= evita que o navegador use uma versão antiga em cache -->
-  <script src="js/data.js?v=6"></script>
-  <script src="js/art.js?v=6"></script>
-  <script src="js/story.js?v=6"></script>
-  <script src="js/speech.js?v=6"></script>
-  <script src="js/app.js?v=6"></script>
+  <script src="js/diag.js?v=10"></script>
+  <script src="js/data.js?v=10"></script>
+  <script src="js/art.js?v=10"></script>
+  <script src="js/story.js?v=10"></script>
+  <script src="js/speech.js?v=10"></script>
+  <script src="js/app.js?v=10"></script>
 </body>
 </html>

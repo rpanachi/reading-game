@@ -97,7 +97,35 @@ r = t.update([[say('um dia lili foi')], [say('banana')], [say('D')]], []);
 check('"D" avança por "de"', t.progress, 5);
 t.set(8);
 t.update([], [[say('parque o sol')]]);
-check('toque na 8ª palavra + fala segue', t.progress, 11);
+check('pulo até a 8ª palavra + fala segue', t.progress, 11);
+
+// leitura silabada com pausa entre as sílabas: "ca" (enunciado 1) + "chorro" (enunciado 2)
+t = new S.Tracker(targetsOf('Era uma vez um cachorro chamado Rex.'));
+t.update([[say('era uma vez um')]], []);
+r = t.update([[say('era uma vez um')], [say('ca')]], []);
+check('"ca" sozinho é tentativa não entendida', r.miss, true);
+r = t.update([[say('era uma vez um')], [say('ca')], [say('chorro')]], []);
+check('"ca" + "chorro" no enunciado seguinte casa "cachorro"', t.progress, 5);
+check('junção entre enunciados não é erro', r.miss, false);
+// regressões do diagnóstico de 2026-09-05: a parcial repetida com confiança maior
+// e o final com alternativas NÃO podem casar de novo as palavras já contadas
+t = new S.Tracker(targetsOf('Era uma vez um menino chamado Leo.'));
+t.update([[say('era era')]], []);                       // "era" já lido (final)
+t.update([[say('era era')]], [[say('uma')]]);           // parcial "uma"(0.01)
+check('parcial "uma" avança para "vez"', t.progress, 2);
+t.update([[say('era era')]], [[say('uma')]]);           // mesma parcial, agora (0.90)
+check('parcial repetida não vira "um" pulando "vez"', t.progress, 2);
+t.update([[say('era era')], [say('uma uma')]], []);     // final da mesma fala
+check('final "uma uma" não conta de novo', t.progress, 2);
+t = new S.Tracker(targetsOf('Você me dá um pouco de água? Estou com sede!'));
+t.update([[say('você')], [say('me')]], []);
+t.update([[say('você')], [say('me')]], [[say('um pouco de água')]]);
+check('parcial "um pouco de água" chega em "estou"', t.progress, 7);
+t.update([[say('você')], [say('me')], [say('um pouco de água'), say('com um pouco de água')]], []);
+check('alternativa "com …" não pula "Estou"', t.progress, 7);
+check('"1" ≈ "uma"', S.similar(S.normalize('1'), 'uma'), true);
+check('"era 1 vez 1 gato"', S.computeProgress(targetsOf('Era uma vez um gato chamado Tom.'), [[say('era 1 vez 1 gato')]]), 5);
+check('motivo do casamento', S.why('gatu', 'gato'), 'fonética gatu');
 
 /* ---------- rótulo "Ouvi" (parcial/final) ---------- */
 const calls = [];
@@ -109,6 +137,31 @@ l._onResult(ev([['um dia lili foi', true], ['de patinete', true], ['', false]]))
 check('rótulo parcial', JSON.stringify(calls[0]), JSON.stringify(['um dia', false]));
 check('rótulo da nova parcial', JSON.stringify(calls[1]), JSON.stringify(['de', false]));
 check('rótulo final (parcial vazia não apaga)', JSON.stringify(calls[2]), JSON.stringify(['de patinete', true]));
+
+/* ---------- vigia da sessão (simulado, sem navegador) ---------- */
+function fakeListener({ ageMs, sinceFirstMs, sinceResultMs, voicedMs, quietMs, pending }) {
+  const l = new S.Listener({});
+  const restarts = [];
+  l.active = true;
+  l.rec = { abort() { restarts.push('abort'); } };
+  l.restart = (reason) => restarts.push(reason);
+  const now = Date.now();
+  l._startedAt = now - ageMs;
+  l._firstResultAt = sinceFirstMs == null ? 0 : now - sinceFirstMs;
+  l._lastResult = now - sinceResultMs;
+  l.interimResults = pending ? [[['x']]] : [];
+  l.meter = { voicedMs, lastVoiceAt: now - quietMs, level: 0 };
+  l._check();
+  return restarts;
+}
+// cenário do diagnóstico: sessão com 65s desde o 1º resultado, "Tom" dito (voz 900ms), 7s sem resposta
+check('travamento: voz captada sem resposta reinicia', fakeListener({ ageMs: 72000, sinceFirstMs: 65000, sinceResultMs: 7000, voicedMs: 900, quietMs: 3000, pending: true }).length, 1);
+check('não reinicia enquanto a criança ainda fala', fakeListener({ ageMs: 72000, sinceFirstMs: 65000, sinceResultMs: 7000, voicedMs: 900, quietMs: 200, pending: true }).length, 0);
+check('pausa normal (sem voz) não reinicia', fakeListener({ ageMs: 20000, sinceFirstMs: 15000, sinceResultMs: 9000, voicedMs: 0, quietMs: 9000, pending: false }).length, 0);
+check('renovação preventiva aos 45s numa pausa', fakeListener({ ageMs: 50000, sinceFirstMs: 46000, sinceResultMs: 2000, voicedMs: 0, quietMs: 2000, pending: false }).length, 1);
+check('renovação espera se há parcial pendente (<55s)', fakeListener({ ageMs: 50000, sinceFirstMs: 46000, sinceResultMs: 2000, voicedMs: 0, quietMs: 2000, pending: true }).length, 0);
+check('renovação força aos 55s mesmo com parcial pendente', fakeListener({ ageMs: 60000, sinceFirstMs: 56000, sinceResultMs: 2000, voicedMs: 0, quietMs: 2000, pending: true }).length, 1);
+check('sessão jovem não renova', fakeListener({ ageMs: 30000, sinceFirstMs: 25000, sinceResultMs: 2000, voicedMs: 0, quietMs: 2000, pending: false }).length, 0);
 
 console.log(`\n${total - fails}/${total} verificações ok`);
 process.exit(fails ? 1 : 0);

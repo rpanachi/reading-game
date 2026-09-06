@@ -6,12 +6,13 @@
   const $$ = (s) => Array.from(document.querySelectorAll(s));
   const D = window.GAME_DATA;
   const VOICES = { francisca: { label: 'feminina', gender: 'f' }, antonio: { label: 'masculina', gender: 'm' } };
-  const APP_VERSION = '6'; // aparece no rodapé da página de leitura; suba junto com o ?v= do index.html
+  const APP_VERSION = '10'; // aparece no rodapé da página de leitura; suba junto com o ?v= do index.html
+  const log = (tag, msg, data) => DIAG.log(tag, msg, data);
 
   const state = {
     sel: { character: null, vehicle: null, place: null, situation: null, dialog: null, ending: null },
     story: null, index: 0, tokens: [], targets: [], progress: 0,
-    listening: false, touchMode: false, micDenied: false,
+    listening: false, micDenied: false,
     startedAt: 0, wordsRead: 0,
     voice: 'francisca', tracker: null, missFinals: 0, speaking: false,
   };
@@ -47,6 +48,7 @@
   function showScreen(name) {
     $$('.screen').forEach((s) => s.classList.toggle('active', s.id === `screen-${name}`));
     window.scrollTo(0, 0);
+    log('tela', name);
   }
 
   function confetti(n) {
@@ -107,11 +109,12 @@
   /* ---------- reconhecimento de voz ---------- */
   const listener = new SPEECH.Listener({
     onWords(finals, interims, lastText, lastIsFinal) {
-      if (!state.story || !state.tracker) return;
+      if (!state.story || !state.tracker) { log('app', 'resultado ignorado: sem história/tracker'); return; }
+      log('app', `onWords finais=${finals.length} parciais=${interims.length} texto="${lastText || ''}"${lastIsFinal ? ' FINAL' : ''} falando=${state.speaking} progresso=${state.progress}/${state.targets.length} atual="${currentWord()}"`);
       // A contabilidade roda sempre (inclusive no aviso de fim de sessão que
       // chega enquanto o jogo fala); só a tela e as dicas esperam o silêncio.
       const r = state.tracker.update(finals, interims);
-      if (state.speaking) return;
+      if (state.speaking) { log('app', 'jogo está falando: tela não atualizada'); return; }
       // "Ouvi: …" mostra o que o reconhecedor entendeu (útil para diagnosticar);
       // "…" no fim significa resultado parcial, ainda em revisão. Quando a
       // interpretação difere do texto cru (ex.: "1" → "um"), ela aparece também.
@@ -122,12 +125,13 @@
         $('#heard').textContent = `Ouvi: “${lastText}”${interp}${lastIsFinal ? '' : ' …'}`;
       }
       if (r.advanced) {
-        setProgress(state.tracker.progress);
+        setProgress(state.tracker.progress, 'voz');
         state.missFinals = 0;
         hideHint();
       } else if (r.miss && state.progress < state.targets.length) {
         // Uma tentativa inteira (parcial + final) não avançou a leitura.
         state.missFinals++;
+        log('app', `tentativa não entendida nº${state.missFinals} na palavra "${currentWord()}"`);
         if (state.missFinals >= 2) skipCurrentWord();   // não deixa a criança presa numa palavra
         else showHint();
       }
@@ -136,7 +140,7 @@
       $('#btn-mic').classList.toggle('hearing', on);
     },
     onRestart(reason) {
-      console.info(`[voz] sessão de reconhecimento reiniciada (${reason})`);
+      log('app', `reinício do reconhecimento: ${reason}`);
     },
     onState(s) {
       state.listening = s === 'listening';
@@ -145,14 +149,16 @@
       setStatus();
     },
     onError(kind) {
+      log('app', `erro do reconhecimento: ${kind}`);
       state.listening = false;
       updateMicUI();
       if (kind === 'not-allowed') state.micDenied = true;
-      enableTouchMode(true, kind);
+      showNotice(kind);
+      setStatus();
     },
   });
 
-  // Medidor local do microfone: mostra que está ouvindo e alimenta o vigia.
+  // Medidor local do microfone: só indicador visual (barras ao lado do 🎤).
   const vuBars = $$('#vu i');
   const meter = new SPEECH.Meter((level, voice) => {
     const n = Math.min(vuBars.length, Math.round(level * 25));
@@ -163,6 +169,7 @@
 
   function startListening() {
     if (!SPEECH.supported) return;
+    log('app', 'startListening');
     audio.ensure();
     listener.start();
     $('#notice').hidden = true;
@@ -170,7 +177,7 @@
   }
 
   function toggleMic() {
-    if (listener.active) { listener.stop(); meter.stop(); setStatus('Microfone desligado.'); }
+    if (listener.active) { log('app', 'microfone desligado pelo usuário'); listener.stop(); meter.stop(); setStatus('Microfone desligado.'); }
     else startListening();
   }
 
@@ -186,25 +193,18 @@
     if (msg) { el.textContent = msg; return; }
     if (state.progress >= state.targets.length && state.targets.length) el.textContent = 'Muito bem! 🎉 Vamos para a próxima página.';
     else if (state.listening) el.textContent = 'Leia em voz alta! 🎧';
-    else if (state.touchMode) el.textContent = 'Toque nas palavras enquanto lê.';
     else el.textContent = SPEECH.supported ? 'Clique no microfone para começar a ler.' : 'Este navegador não reconhece voz.';
   }
 
   const NOTICES = {
-    unsupported: 'Este navegador não tem reconhecimento de voz. Abra o jogo no Microsoft Edge ou no Google Chrome para ler com o microfone. Por enquanto, toque nas palavras para marcá-las.',
-    'not-allowed': 'O microfone não foi liberado. Permita o acesso ao microfone e clique no botão 🎤, ou toque nas palavras para marcá-las.',
-    'no-mic': 'Nenhum microfone foi encontrado. Toque nas palavras para marcá-las enquanto lê.',
-    network: 'O reconhecimento de voz precisa de internet e não conseguiu conectar. Toque nas palavras para marcá-las.',
+    unsupported: 'Este navegador não tem reconhecimento de voz. Abra o jogo no Google Chrome ou no Microsoft Edge para ler com o microfone.',
+    'not-allowed': 'O microfone não foi liberado. Permita o acesso ao microfone no navegador e clique no botão 🎤.',
+    'no-mic': 'Nenhum microfone foi encontrado. Conecte um microfone e clique no botão 🎤.',
+    network: 'O reconhecimento de voz precisa de internet e não conseguiu conectar. Verifique a conexão e clique no botão 🎤.',
   };
-
-  function enableTouchMode(on, reason) {
-    state.touchMode = on;
-    $('#touch-mode').checked = on;
-    document.body.classList.toggle('touch-mode', on);
+  function showNotice(kind) {
     const n = $('#notice');
-    if (reason && NOTICES[reason]) { n.textContent = NOTICES[reason]; n.hidden = false; }
-    else if (!on) n.hidden = true;
-    setStatus();
+    if (NOTICES[kind]) { n.textContent = NOTICES[kind]; n.hidden = false; }
   }
 
   /* ---------- dicas quando a palavra não foi entendida ---------- */
@@ -215,6 +215,7 @@
   function showHint() {
     const w = currentWord();
     if (!w) return;
+    log('app', `dica: tente de novo "${w}"`);
     const h = $('#hint');
     h.innerHTML = `Tente de novo: <b>${w}</b> <span class="hint-ear">🔊 ouvir a palavra</span>`;
     h.hidden = false;
@@ -225,11 +226,12 @@
 
   /** Duas tentativas não entendidas: marca a palavra como pulada e segue em frente. */
   function skipCurrentWord() {
+    log('app', `pulando a palavra "${currentWord()}" após 2 tentativas`);
     const span = $(`#reading-text .w[data-wi="${state.progress}"]`);
     if (span) span.classList.add('skipped');
     state.missFinals = 0;
     hideHint();
-    setProgress(state.progress + 1, { count: false });
+    setProgress(state.progress + 1, 'pulo automático', { count: false, manual: true });
     if (state.progress < state.targets.length) setStatus('Tudo bem, vamos em frente! 💪');
   }
 
@@ -244,6 +246,7 @@
   function speakText(text) {
     if (!text || state.speaking) return;
     const wasListening = listener.active;
+    log('app', `falar "${text}" (microfone ${wasListening ? 'pausado' : 'já desligado'})`);
     if (wasListening) listener.stop();   // o microfone não deve "ouvir" a própria voz do jogo
     state.speaking = true;
     $('#btn-listen').disabled = true;
@@ -262,11 +265,12 @@
     state.story = STORY.generate(state.sel);
     state.wordsRead = 0;
     state.startedAt = Date.now();
+    log('história', 'início', { escolhas: state.sel, paginas: state.story.slides.map((s) => s.text) });
     showScreen('read');
     goToSlide(0);
     // Escutar é o padrão ao abrir a história; se o microfone falhar, o
-    // onError liga o modo toque e explica o motivo.
-    if (!SPEECH.supported) enableTouchMode(true, 'unsupported');
+    // onError mostra o aviso com o motivo.
+    if (!SPEECH.supported) showNotice('unsupported');
     else startListening();
   }
 
@@ -278,6 +282,7 @@
     state.tokens = SPEECH.tokenize(slide.text);
     state.targets = state.tokens.filter((t) => t.wordIndex !== null).map((t) => t.norm);
     state.tracker = new SPEECH.Tracker(state.targets);
+    log('página', `${i + 1}/${state.story.slides.length} "${slide.text}"`, { alvos: state.targets.map((w, k) => `#${k}${w}`).join(' ') });
     const scene = $('#scene');
     scene.classList.remove('done');
     scene.innerHTML = ART.renderScene(slide.scene);
@@ -311,8 +316,8 @@
       span.textContent = tok.text;
       if (tok.wordIndex !== null) {
         span.dataset.wi = tok.wordIndex;
-        span.title = state.touchMode ? 'Toque para marcar como lida' : 'Toque para ouvir a palavra';
-        span.addEventListener('click', () => onWordClick(tok));
+        span.title = 'Toque para ouvir a palavra';
+        span.addEventListener('click', () => speakText(tok.text.replace(/[^\p{L}\p{N}'-]/gu, '')));
       }
       p.appendChild(span);
       p.appendChild(document.createTextNode(' '));
@@ -328,22 +333,19 @@
     });
   }
 
-  function onWordClick(tok) {
-    if (state.touchMode) {
-      if (tok.wordIndex + 1 > state.progress) setProgress(tok.wordIndex + 1);
-    } else {
-      speakText(tok.text.replace(/[^\p{L}\p{N}'-]/gu, ''));
-    }
-  }
-
-  function setProgress(p, { count = true } = {}) {
+  function setProgress(p, source, { count = true, manual = false } = {}) {
     const total = state.targets.length;
     const wasComplete = state.progress >= total;
     const clamped = Math.min(p, total);
     const delta = clamped - state.progress;
     if (delta <= 0) return;
+    log('app', `progresso ${state.progress}→${clamped}/${total} (${source}) próxima="${state.targets[clamped] || '-'}"`);
     state.progress = clamped;
-    if (state.tracker) state.tracker.set(clamped);   // toque/pular também movem o ponto de partida
+    // Só um pulo manual move o ponto de partida do Tracker. Fazer isso a cada
+    // avanço por voz empurrava o ponteiro para depois de palavras que ainda
+    // estavam numa parcial viva, e o resultado final as casava de novo mais à
+    // frente ("uma" virava "um" pulando "vez"; "com" pulava "Estou").
+    if (manual && state.tracker) state.tracker.set(clamped);
     if (count) state.wordsRead += delta;
     updateHighlight();
     if (state.progress >= total && !wasComplete) onSlideComplete();
@@ -351,6 +353,7 @@
   }
 
   function onSlideComplete() {
+    log('app', 'página completa');
     audio.ding();
     hideHint();
     $('#scene').classList.add('done');
@@ -373,6 +376,7 @@
   }
 
   function finish() {
+    log('história', 'fim');
     listener.stop();
     meter.stop();
     SPEECH.stopSpeaking();
@@ -391,6 +395,7 @@
   function readAgain() {
     state.wordsRead = 0;
     state.startedAt = Date.now();
+    log('história', 'ler de novo');
     showScreen('read');
     goToSlide(0);
     if (SPEECH.supported) startListening();
@@ -404,6 +409,13 @@
     showScreen('compose');
   }
 
+  async function copyDiagnostics() {
+    if (!DIAG.enabled) return;
+    log('app', 'copiando diagnóstico');
+    const ok = await DIAG.copy();
+    setStatus(ok ? `Diagnóstico copiado (${DIAG.size()} linhas). Cole no chat.` : 'Não consegui copiar; abra o console do navegador.');
+  }
+
   /* ---------- eventos ---------- */
   $('#btn-random').addEventListener('click', randomize);
   $('#btn-start').addEventListener('click', startStory);
@@ -411,11 +423,11 @@
   $('#btn-new').addEventListener('click', backToCompose);
   $('#btn-again').addEventListener('click', readAgain);
   $('#btn-next').addEventListener('click', nextSlide);
-  $('#btn-skip').addEventListener('click', () => { setProgress(state.targets.length, { count: false }); });
+  $('#btn-skip').addEventListener('click', () => { log('app', 'pular página'); setProgress(state.targets.length, 'pular página', { count: false, manual: true }); });
   $('#btn-mic').addEventListener('click', toggleMic);
   $('#btn-listen').addEventListener('click', () => speakText(state.story.slides[state.index].text));
+  $('#btn-diag').addEventListener('click', copyDiagnostics);
   $('#hint').addEventListener('click', () => speakText(currentWord()));
-  $('#touch-mode').addEventListener('change', (e) => { enableTouchMode(e.target.checked, null); renderText(); });
   $('#voice').value = state.voice;
   $('#voice').addEventListener('change', (e) => {
     state.voice = e.target.value;
@@ -432,6 +444,9 @@
     }
   });
 
+  // O botão de diagnóstico só existe em modo DEBUG (local ou ?debug=1).
+  $('#btn-diag').hidden = !DIAG.enabled;
+  log('app', `versão ${APP_VERSION} carregada`, { reconhecimento: SPEECH.supported, recognizer: SPEECH.recognizerName(), voz: SPEECH.ttsSupported });
   renderComposer();
   updateMicUI();
   updateEngineLabel();

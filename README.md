@@ -53,6 +53,17 @@ todo push em `main` atualiza o site em cerca de um minuto. O arquivo
 `CNAME` define o domínio (no DNS, `reading-game` é um CNAME para
 `rpanachi.github.io`). O microfone só funciona em HTTPS.
 
+## Modo DEBUG (diagnóstico do reconhecimento)
+
+`js/diag.js` define `window.DEBUG`, que é `true` só em modo local
+(`localhost`, `127.0.0.1` ou `file://`) ou quando a URL traz `?debug=1`.
+Com DEBUG ligado, tudo que acontece no reconhecimento vai para o console
+com o prefixo `[voz]` (eventos e tempos de cada sessão, resultados com
+confiança, decisão do casamento de cada palavra, estado do acompanhamento,
+batimento a cada 3 s) e o botão "📋 Copiar diagnóstico" copia o log inteiro
+para colar num chat. No site publicado (DEBUG desligado) nada é registrado
+e o botão não aparece.
+
 ## Testes
 
 ```bash
@@ -79,12 +90,14 @@ cenários que já travaram.
 
 1. O texto da página é dividido em palavras normalizadas (minúsculas, sem
    acentos e sem pontuação).
-2. O reconhecimento trabalha **um enunciado por vez**: a sessão termina na
-   primeira pausa da fala, com o resultado final na hora e até 5
-   alternativas, e recomeça imediatamente sem o contexto anterior. Assim
-   cada palavra (ou trecho curto) é reconhecida de forma independente e uma
-   nova tentativa depois de um erro é avaliada sem espera. O microfone
-   liga sozinho ao abrir a história.
+2. O reconhecimento usa **uma sessão contínua**, mantida durante toda a
+   história (resultados parciais e até 5 alternativas). Reiniciar a sessão
+   a cada palavra foi testado e descartado: o Chrome fecha uma sessão não
+   contínua ~100 ms depois do fim da fala, mas a primeira resposta do
+   reconhecedor numa sessão nova leva 1 a 2 s, então palavras curtas ditas
+   sozinhas morriam sem resultado (30 de 97 sessões num teste real). "Uma
+   palavra por vez" é garantido pelo acompanhamento (item 4), não pela
+   sessão. O microfone liga sozinho ao abrir a história.
 3. Cada palavra vira uma **chave fonética do português brasileiro**
    (`phon` em `js/speech.js`): "gato"/"gatu", "chamado"/"xamadu",
    "vez"/"ves", "sol"/"sou", "bem"/"ben", "falar"/"fala" viram a mesma
@@ -92,18 +105,25 @@ cenários que já travaram.
    diferença (Levenshtein). Leitura silabada ("ca cho rro") também casa.
 4. As palavras ouvidas avançam um ponteiro pelo texto, sempre a partir da
    palavra que está destacada na tela (o ponteiro nunca volta, mesmo que o
-   navegador reinicie a sessão de reconhecimento). Até duas palavras não
-   entendidas podem ser puladas para a leitura não travar em "o", "e", "de".
+   navegador reinicie a sessão de reconhecimento). Uma palavra não entendida
+   pode ser pulada para a leitura não travar em "o", "e", "de", mas só com
+   casamento exato da palavra seguinte; as regras tolerantes (fonética,
+   "1" = um/uma, letra inicial) valem apenas para a palavra esperada. Uma
+   palavra repetida ("uma uma") só pode casar com a próxima esperada.
    Palavras de até duas letras ditas sozinhas costumam voltar como uma
    letra ("de" → "D"); isso também vale.
 5. Se uma tentativa inteira não avança nada, aparece a dica "Tente de novo:
    palavra" com um botão para ouvir a pronúncia. Na segunda tentativa sem
    sucesso a palavra é marcada em amarelo (pulada) e a leitura segue, para a
    criança nunca ficar presa.
-6. Um vigia reinicia o reconhecimento sozinho quando o microfone capta voz
-   (medidor ao lado do botão 🎤) mas nenhum resultado chega em alguns
-   segundos, e cada página começa com uma sessão nova. O reinício é
-   imediato, sem espera.
+6. Um vigia protege a sessão, sempre num momento de silêncio do microfone
+   (medidor ao lado do botão 🎤) para não cortar uma palavra: reinicia
+   quando o microfone captou voz e nenhum resultado chegou em 5 s (sessão
+   travada); renova a sessão a partir de 45 s depois do primeiro resultado
+   numa pausa, porque o Chrome para de responder por volta de 60 s sem
+   avisar; e renova ao virar a página se a sessão já tem mais de 30 s ou
+   uma parcial pendente. O reinício é imediato; só a primeira resposta da
+   sessão nova demora 1 a 2 s.
 7. As palavras lidas ficam verdes, a próxima fica laranja. Quando a página
    termina, toca um sino, cai confete e o botão "Próxima página" é liberado.
 
