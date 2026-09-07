@@ -6,7 +6,7 @@
   const $$ = (s) => Array.from(document.querySelectorAll(s));
   const D = window.GAME_DATA;
   const VOICES = { francisca: { label: 'feminina', gender: 'f' }, antonio: { label: 'masculina', gender: 'm' } };
-  const APP_VERSION = '11'; // aparece no rodapé da página de leitura; suba junto com o ?v= do index.html
+  const APP_VERSION = '12'; // aparece no rodapé da página de leitura; suba junto com o ?v= do index.html
   const log = (tag, msg, data) => DIAG.log(tag, msg, data);
 
   const state = {

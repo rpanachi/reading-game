@@ -53,6 +53,13 @@ todo push em `main` atualiza o site em cerca de um minuto. O arquivo
 `CNAME` define o domínio (no DNS, `reading-game` é um CNAME para
 `rpanachi.github.io`). O microfone só funciona em HTTPS.
 
+O domínio passa pelo proxy da Cloudflare, que guarda os arquivos por
+4 h. Por isso toda mudança sobe o `?v=` dos scripts no `index.html` e o
+`APP_VERSION` em `js/app.js` (o rodapé da leitura mostra a versão). Depois
+de publicar, espere um minuto antes de abrir o site: se uma URL nova for
+pedida enquanto o GitHub ainda serve a versão antiga, o proxy guarda a
+antiga por 4 h.
+
 ## Modo DEBUG (diagnóstico do reconhecimento)
 
 `js/diag.js` define `window.DEBUG`, que é `true` só em modo local
