@@ -116,14 +116,16 @@ cenários que já travaram.
    palavra" com um botão para ouvir a pronúncia. Na segunda tentativa sem
    sucesso a palavra é marcada em amarelo (pulada) e a leitura segue, para a
    criança nunca ficar presa.
-6. Um vigia protege a sessão, sempre num momento de silêncio do microfone
-   (medidor ao lado do botão 🎤) para não cortar uma palavra: reinicia
-   quando o microfone captou voz e nenhum resultado chegou em 5 s (sessão
-   travada); renova a sessão a partir de 45 s depois do primeiro resultado
-   numa pausa, porque o Chrome para de responder por volta de 60 s sem
-   avisar; e renova ao virar a página se a sessão já tem mais de 30 s ou
-   uma parcial pendente. O reinício é imediato; só a primeira resposta da
-   sessão nova demora 1 a 2 s.
+6. Um vigia (2x por segundo) protege a sessão, sempre com o microfone em
+   silêncio (medidor ao lado do botão 🎤) para não cortar uma palavra:
+   toda fala captada tem que ser respondida, e se 2 s depois de a criança
+   calar nenhum resultado chegou, o reconhecedor travou nesse enunciado e
+   a sessão é reiniciada na hora (enquanto a resposta não chega o status
+   mostra "Entendendo..."); renova a sessão a partir de 45 s depois do
+   primeiro resultado numa pausa, porque o Chrome para de responder por
+   volta de 60 s sem avisar; e renova ao virar a página se a sessão já tem
+   mais de 30 s ou uma parcial pendente. O reinício é imediato; só a
+   primeira resposta da sessão nova demora 1 a 2 s.
 7. As palavras lidas ficam verdes, a próxima fica laranja. Quando a página
    termina, toca um sino, cai confete e o botão "Próxima página" é liberado.
 

@@ -309,7 +309,7 @@ window.SPEECH = (function () {
       log('ouvinte', `start() active=${this.active} rec=${!!this.rec}`);
       this.active = true;
       if (!this.rec) this._spawn();
-      if (!this._watchdog) this._watchdog = setInterval(() => this._check(), 1000);
+      if (!this._watchdog) this._watchdog = setInterval(() => this._check(), 500);
       return true;
     }
 
@@ -395,14 +395,23 @@ window.SPEECH = (function () {
       const quietFor = this.meter && this.meter.lastVoiceAt ? now - this.meter.lastVoiceAt : Infinity;
       const pending = this.interimResults.length > 0;
       this._ticks++;
-      if (this._ticks % 3 === 0) {
+      if (this._ticks % 6 === 0) {
         log('batimento', `sessão#${this.session} rec=${!!this.rec} idade=${now - this._startedAt}ms desde1ºResultado=${this._firstResultAt ? now - this._firstResultAt + 'ms' : '-'} semResultado=${silentFor}ms vozSemResposta=${Math.round(voiced)}ms quietoHá=${quietFor === Infinity ? '-' : quietFor + 'ms'} falaSemResposta=${this._speechAt ? now - this._speechAt + 'ms' : '-'} nível=${this.meter ? this.meter.level.toFixed(3) : '-'} finais=${this.finalResults.length} parciais=${this.interimResults.length}`);
       }
       if (!this.rec) { if (now - this._startedAt > 3000) { log('vigia', 'sem sessão há mais de 3s, recriando'); this._spawn(); } return; }
       const quiet = quietFor > 800;
-      if (voiced > 700 && silentFor > 5000 && quiet) { this.restart(`voz captada (${Math.round(voiced)}ms) sem resposta há ${Math.round(silentFor / 1000)}s`); return; }
+      // Uma tentativa de fala (voz captada depois do último resultado) tem que
+      // ser respondida: se 2 s depois de a criança calar nada chegou, o
+      // reconhecedor travou nesse enunciado; reinicia já, antes que ela repita.
+      if (this.waiting() && quietFor > 2000) { this.restart(`fala de ${Math.round(voiced)}ms sem resposta ${(quietFor / 1000).toFixed(1)}s depois de terminar`); return; }
       if (this._speechAt && now - this._speechAt > 8000 && quiet) { this.restart('fala sem resposta há 8s'); return; }
       if (age > 45000 && quiet && silentFor > 1200 && (!pending || age > 55000)) this.restart(`renovação preventiva (${Math.round(age / 1000)}s desde o 1º resultado${pending ? ', parcial pendente' : ''})`);
+    }
+
+    /** Há fala captada pelo microfone ainda sem nenhum resultado do reconhecedor? */
+    waiting() {
+      const m = this.meter;
+      return !!(this.active && this.rec && m && m.lastVoiceAt > this._lastResult && m.voicedMs > 400);
     }
 
     restart(reason) {

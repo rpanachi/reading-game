@@ -6,7 +6,7 @@
   const $$ = (s) => Array.from(document.querySelectorAll(s));
   const D = window.GAME_DATA;
   const VOICES = { francisca: { label: 'feminina', gender: 'f' }, antonio: { label: 'masculina', gender: 'm' } };
-  const APP_VERSION = '10'; // aparece no rodapé da página de leitura; suba junto com o ?v= do index.html
+  const APP_VERSION = '11'; // aparece no rodapé da página de leitura; suba junto com o ?v= do index.html
   const log = (tag, msg, data) => DIAG.log(tag, msg, data);
 
   const state = {
@@ -14,7 +14,7 @@
     story: null, index: 0, tokens: [], targets: [], progress: 0,
     listening: false, micDenied: false,
     startedAt: 0, wordsRead: 0,
-    voice: 'francisca', tracker: null, missFinals: 0, speaking: false,
+    voice: 'francisca', tracker: null, missFinals: 0, speaking: false, waiting: false,
   };
   try { const v = localStorage.getItem('voz'); if (v && VOICES[v]) state.voice = v; } catch (_) { /* sem storage */ }
 
@@ -167,6 +167,13 @@
   });
   listener.meter = meter;
 
+  // "Entendendo..." enquanto há fala captada ainda sem resposta do reconhecedor,
+  // para ninguém repetir a palavra antes da hora.
+  setInterval(() => {
+    const w = listener.waiting();
+    if (w !== state.waiting) { state.waiting = w; if (state.story && !state.speaking) setStatus(); }
+  }, 250);
+
   function startListening() {
     if (!SPEECH.supported) return;
     log('app', 'startListening');
@@ -192,6 +199,7 @@
     const el = $('#status-line');
     if (msg) { el.textContent = msg; return; }
     if (state.progress >= state.targets.length && state.targets.length) el.textContent = 'Muito bem! 🎉 Vamos para a próxima página.';
+    else if (state.listening && state.waiting) el.textContent = 'Entendendo... ⏳';
     else if (state.listening) el.textContent = 'Leia em voz alta! 🎧';
     else el.textContent = SPEECH.supported ? 'Clique no microfone para começar a ler.' : 'Este navegador não reconhece voz.';
   }

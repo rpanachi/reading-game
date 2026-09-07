@@ -162,6 +162,11 @@ check('renovação preventiva aos 45s numa pausa', fakeListener({ ageMs: 50000, 
 check('renovação espera se há parcial pendente (<55s)', fakeListener({ ageMs: 50000, sinceFirstMs: 46000, sinceResultMs: 2000, voicedMs: 0, quietMs: 2000, pending: true }).length, 0);
 check('renovação força aos 55s mesmo com parcial pendente', fakeListener({ ageMs: 60000, sinceFirstMs: 56000, sinceResultMs: 2000, voicedMs: 0, quietMs: 2000, pending: true }).length, 1);
 check('sessão jovem não renova', fakeListener({ ageMs: 30000, sinceFirstMs: 25000, sinceResultMs: 2000, voicedMs: 0, quietMs: 2000, pending: false }).length, 0);
+// tentativa de fala sem resposta: "vez" dito, 2,5 s de silêncio, nenhum resultado → reinicia já
+check('fala sem resposta 2s depois de calar reinicia', fakeListener({ ageMs: 20000, sinceFirstMs: 15000, sinceResultMs: 4000, voicedMs: 600, quietMs: 2500, pending: false }).length, 1);
+check('fala respondida (resultado depois da voz) não reinicia', fakeListener({ ageMs: 20000, sinceFirstMs: 15000, sinceResultMs: 1000, voicedMs: 600, quietMs: 2500, pending: false }).length, 0);
+check('ainda dentro dos 2s de silêncio não reinicia', fakeListener({ ageMs: 20000, sinceFirstMs: 15000, sinceResultMs: 3000, voicedMs: 600, quietMs: 1200, pending: false }).length, 0);
+check('ruído curto (<400ms de voz) não reinicia', fakeListener({ ageMs: 20000, sinceFirstMs: 15000, sinceResultMs: 4000, voicedMs: 200, quietMs: 2500, pending: false }).length, 0);
 
 console.log(`\n${total - fails}/${total} verificações ok`);
 process.exit(fails ? 1 : 0);
