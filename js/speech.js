@@ -12,6 +12,7 @@ window.SPEECH = (function () {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   const supported = !!SR;
   const log = (tag, msg, data) => { if (window.DIAG) window.DIAG.log(tag, msg, data); };
+  const detail = (tag, msg, data) => { if (window.DIAG) window.DIAG.detail(tag, msg, data); };
 
   const NUM = { 1: 'um', 2: 'dois', 3: 'tres', 4: 'quatro', 5: 'cinco', 6: 'seis', 7: 'sete', 8: 'oito', 9: 'nove', 10: 'dez' };
   const ALIAS = {
@@ -111,23 +112,34 @@ window.SPEECH = (function () {
    * Retorna o índice da próxima palavra a ler; `trace` (opcional) recebe
    * uma linha por palavra falada explicando a decisão.
    */
-  function matchProgress(target, spoken, start = 0, lookahead = 2, trace = null) {
+  function matchProgress(target, spoken, start = 0, lookahead = 2, trace = null, minPos = start) {
     let t = start;
     for (let i = 0; i < spoken.length && t < target.length; i++) {
       // Palavra repetida ("uma uma": a criança repetiu ou o reconhecedor duplicou)
       // só pode casar com a próxima palavra esperada, nunca pulando.
       const repeated = i > 0 && spoken[i] === spoken[i - 1];
-      const limit = Math.min(t + (repeated ? 1 : lookahead), target.length);
+      // Enquanto t está atrás da palavra destacada na tela (minPos), a busca
+      // vai ATÉ ela: são palavras já lidas que o enunciado repete, e alcançá-las
+      // é só recuperar o atraso (exige casamento exato, ver abaixo). A partir
+      // dela vale a janela normal. Sem isso, quando o ponteiro dos finais ficava
+      // 2+ palavras atrás do que está na tela, a palavra atual ficava FORA da
+      // janela e não casava por mais que a criança repetisse.
+      const limit = t < minPos
+        ? Math.min(minPos + 1, target.length)
+        : Math.min(t + (repeated ? 1 : lookahead), target.length);
       let matched = false;
       for (let k = t; k < limit && !matched; k++) {
-        // Pular uma palavra (k > t) só com casamento exato: as regras tolerantes
-        // (fonética, número, inicial) valem apenas para a palavra esperada.
+        // As regras tolerantes (fonética, número, inicial) valem para a palavra
+        // esperada (k === t) e para a palavra destacada na tela (k === minPos),
+        // que é a que a criança está tentando ler. Nas posições do meio — já
+        // lidas ou puladas — só casamento exato, para não pular por parecença.
+        const solta = k === t || k === minPos;
         const r1 = why(spoken[i], target[k]);
-        if (r1 && (k === t || r1 === 'igual')) { if (trace) trace.push(`"${spoken[i]}"→#${k}"${target[k]}" ${r1}${k > t ? ` (pulou ${k - t})` : ''}`); t = k + 1; matched = true; break; }
+        if (r1 && (solta || r1 === 'igual')) { if (trace) trace.push(`"${spoken[i]}"→#${k}"${target[k]}" ${r1}${k > t ? ` (pulou ${k - t})` : ''}`); t = k + 1; matched = true; break; }
         for (let j = 2; j <= 3 && i + j <= spoken.length; j++) {
           const joined = spoken.slice(i, i + j).join('');
           const rj = why(joined, target[k]);
-          if (rj && (k === t || rj === 'igual')) { if (trace) trace.push(`"${spoken.slice(i, i + j).join('+')}"→#${k}"${target[k]}" junção ${rj}`); t = k + 1; i += j - 1; matched = true; break; }
+          if (rj && (solta || rj === 'igual')) { if (trace) trace.push(`"${spoken.slice(i, i + j).join('+')}"→#${k}"${target[k]}" junção ${rj}`); t = k + 1; i += j - 1; matched = true; break; }
         }
       }
       if (!matched && trace) trace.push(`"${spoken[i]}"✗ esperava #${t}"${target[t]}" [${key(spoken[i])}≠${key(target[t])}]${repeated ? ' (repetida)' : ''}`);
@@ -177,10 +189,10 @@ window.SPEECH = (function () {
       }
       for (const words of candidates) {
         const tr = [];
-        const p = matchProgress(this.target, words, from, 2, tr);
+        const p = matchProgress(this.target, words, from, 2, tr, this.progress);
         if (bestTrace === null || p > best) { best = Math.max(best, p); bestTrace = tr; bestWords = words; }
       }
-      log('casar', `${label} de #${from} → #${best} ${best > from ? 'AVANÇOU' : 'não avançou'} | melhor alt: [${(bestWords || []).join(' ')}] | ${(bestTrace || []).join(' ; ')}`);
+      detail('casar', `${label} de #${from} (tela #${this.progress}) → #${best} ${best > from ? 'AVANÇOU' : 'não avançou'} | melhor alt: [${(bestWords || []).join(' ')}] | ${(bestTrace || []).join(' ; ')}`);
       return best;
     }
     set(p) {
@@ -220,7 +232,7 @@ window.SPEECH = (function () {
         this.liveAdvanced = false;
       }
       const out = { advanced: this.progress > before, newFinal, miss: misses > 0, done: this.progress >= len };
-      log('tracker', `progresso ${before}→${this.progress}/${len} committed=${this.committed} aplicados=${this.applied} vivoAvancou=${this.liveAdvanced} ultimoErro=${this.lastMiss ? '[' + this.lastMiss.join(' ') + ']' : '-'} → ${out.advanced ? 'avançou' : out.miss ? 'ERRO (tentativa não entendida)' : 'sem mudança'}${out.done ? ' PÁGINA COMPLETA' : ''}`);
+      detail('tracker', `progresso ${before}→${this.progress}/${len} committed=${this.committed} aplicados=${this.applied} vivoAvancou=${this.liveAdvanced} ultimoErro=${this.lastMiss ? '[' + this.lastMiss.join(' ') + ']' : '-'} → ${out.advanced ? 'avançou' : out.miss ? 'ERRO (tentativa não entendida)' : 'sem mudança'}${out.done ? ' PÁGINA COMPLETA' : ''}`);
       return out;
     }
   }
@@ -302,6 +314,7 @@ window.SPEECH = (function () {
       this._speechAt = 0;       // quando o reconhecedor avisou que ouviu fala sem responder
       this._ticks = 0;
       this.restarts = 0;
+      this.lastText = '';
     }
 
     start() {
@@ -336,16 +349,16 @@ window.SPEECH = (function () {
       this._speechAt = 0;
       if (this.meter) this.meter.resetVoiced();
       rec.onstart = () => { log('sessão', `#${id} onstart (${age()} após start)`); this.h.onState && this.h.onState('listening'); };
-      rec.onaudiostart = () => log('sessão', `#${id} onaudiostart ${age()}`);
-      rec.onsoundstart = () => log('sessão', `#${id} onsoundstart ${age()}`);
-      rec.onspeechstart = () => { log('sessão', `#${id} onspeechstart ${age()}`); if (!this._speechAt) this._speechAt = Date.now(); this.h.onActivity && this.h.onActivity(true); };
-      rec.onspeechend = () => { log('sessão', `#${id} onspeechend ${age()}`); this.h.onActivity && this.h.onActivity(false); };
-      rec.onsoundend = () => log('sessão', `#${id} onsoundend ${age()}`);
-      rec.onaudioend = () => log('sessão', `#${id} onaudioend ${age()}`);
-      rec.onnomatch = () => log('sessão', `#${id} onnomatch ${age()}`);
+      rec.onaudiostart = () => detail('sessão', `#${id} onaudiostart ${age()}`);
+      rec.onsoundstart = () => detail('sessão', `#${id} onsoundstart ${age()}`);
+      rec.onspeechstart = () => { detail('sessão', `#${id} onspeechstart ${age()}`); if (!this._speechAt) this._speechAt = Date.now(); this.h.onActivity && this.h.onActivity(true); };
+      rec.onspeechend = () => { detail('sessão', `#${id} onspeechend ${age()}`); this.h.onActivity && this.h.onActivity(false); };
+      rec.onsoundend = () => detail('sessão', `#${id} onsoundend ${age()}`);
+      rec.onaudioend = () => detail('sessão', `#${id} onaudioend ${age()}`);
+      rec.onnomatch = () => detail('sessão', `#${id} onnomatch ${age()}`);
       rec.onresult = (e) => {
         const now = Date.now();
-        log('sessão', `#${id} onresult ${age()} (${now - this._lastResult}ms desde o último) resultIndex=${e.resultIndex} results=${e.results.length}`);
+        detail('sessão', `#${id} onresult ${age()} (${now - this._lastResult}ms desde o último) resultIndex=${e.resultIndex} results=${e.results.length}`);
         this._lastResult = now;
         if (!this._firstResultAt) this._firstResultAt = now;
         this._speechAt = 0;
@@ -396,7 +409,7 @@ window.SPEECH = (function () {
       const pending = this.interimResults.length > 0;
       this._ticks++;
       if (this._ticks % 6 === 0) {
-        log('batimento', `sessão#${this.session} rec=${!!this.rec} idade=${now - this._startedAt}ms desde1ºResultado=${this._firstResultAt ? now - this._firstResultAt + 'ms' : '-'} semResultado=${silentFor}ms vozSemResposta=${Math.round(voiced)}ms quietoHá=${quietFor === Infinity ? '-' : quietFor + 'ms'} falaSemResposta=${this._speechAt ? now - this._speechAt + 'ms' : '-'} nível=${this.meter ? this.meter.level.toFixed(3) : '-'} finais=${this.finalResults.length} parciais=${this.interimResults.length}`);
+        detail('batimento', `sessão#${this.session} rec=${!!this.rec} idade=${now - this._startedAt}ms desde1ºResultado=${this._firstResultAt ? now - this._firstResultAt + 'ms' : '-'} semResultado=${silentFor}ms vozSemResposta=${Math.round(voiced)}ms quietoHá=${quietFor === Infinity ? '-' : quietFor + 'ms'} falaSemResposta=${this._speechAt ? now - this._speechAt + 'ms' : '-'} nível=${this.meter ? this.meter.level.toFixed(3) : '-'} finais=${this.finalResults.length} parciais=${this.interimResults.length}`);
       }
       if (!this.rec) { if (now - this._startedAt > 3000) { log('vigia', 'sem sessão há mais de 3s, recriando'); this._spawn(); } return; }
       const quiet = quietFor > 800;
@@ -406,6 +419,26 @@ window.SPEECH = (function () {
       if (this.waiting() && quietFor > 2000) { this.restart(`fala de ${Math.round(voiced)}ms sem resposta ${(quietFor / 1000).toFixed(1)}s depois de terminar`); return; }
       if (this._speechAt && now - this._speechAt > 8000 && quiet) { this.restart('fala sem resposta há 8s'); return; }
       if (age > 45000 && quiet && silentFor > 1200 && (!pending || age > 55000)) this.restart(`renovação preventiva (${Math.round(age / 1000)}s desde o 1º resultado${pending ? ', parcial pendente' : ''})`);
+    }
+
+    /** Fotografia do estado, para o diagnóstico quando a leitura trava. */
+    state() {
+      const now = Date.now();
+      const m = this.meter;
+      return {
+        sessao: this.session,
+        idadeMs: this.rec ? now - this._startedAt : null,
+        desde1oResultadoMs: this._firstResultAt ? now - this._firstResultAt : null,
+        semResultadoMs: this._lastResult ? now - this._lastResult : null,
+        parciaisVivas: this.interimResults.length,
+        finaisDaPagina: this.finalResults.length,
+        reinicios: this.restarts,
+        esperandoResposta: this.waiting(),
+        vozSemRespostaMs: m ? Math.round(m.voicedMs) : null,
+        quietoHaMs: m && m.lastVoiceAt ? now - m.lastVoiceAt : null,
+        nivelMic: m ? Number(m.level.toFixed(3)) : null,
+        ultimoTexto: this.lastText || '',
+      };
     }
 
     /** Há fala captada pelo microfone ainda sem nenhum resultado do reconhecedor? */
@@ -436,7 +469,7 @@ window.SPEECH = (function () {
           desc.push(`"${raw.trim()}"(${typeof r[a].confidence === 'number' ? r[a].confidence.toFixed(2) : '?'})`);
           if (words.length) alts.push(words);
         }
-        log('resultado', `#${id} r${i} ${r.isFinal ? 'FINAL' : 'parcial'} alts=${desc.join(' | ')}`);
+        detail('resultado', `#${id} r${i} ${r.isFinal ? 'FINAL' : 'parcial'} alts=${desc.join(' | ')}`);
         if (r[0] && r[0].transcript.trim()) { lastText = r[0].transcript.trim(); lastIsFinal = !!r.isFinal; }
         if (r.isFinal) {
           if (i >= this._nextFinal) { this.finalResults.push(alts); this._nextFinal = i + 1; }
@@ -445,6 +478,7 @@ window.SPEECH = (function () {
         }
       }
       this.interimResults = interim;
+      if (lastText) this.lastText = lastText;
       this.h.onWords && this.h.onWords(this.finalResults, this.interimResults, lastText, lastIsFinal);
     }
 

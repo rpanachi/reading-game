@@ -25,8 +25,9 @@ Depois acesse <http://localhost:8080> no **Microsoft Edge** ou no
   processado pelo serviço do navegador, então é preciso estar online.
 * A página precisa ser servida por `http://localhost` ou `https://` para o
   microfone ser liberado (abrir o arquivo direto com `file://` não funciona).
-* Sem microfone ou sem suporte, o jogo entra no **modo toque**: a criança
-  (ou um adulto) toca nas palavras para marcá-las.
+* O jogo fica sempre no modo reconhecimento. Sem microfone ou sem suporte,
+  um aviso explica o motivo; tocar numa palavra ouve a pronúncia dela e
+  "Pular página" segue em frente.
 
 ## Vozes (botão "Ouvir" e toque nas palavras)
 
@@ -64,12 +65,25 @@ antiga por 4 h.
 
 `js/diag.js` define `window.DEBUG`, que é `true` só em modo local
 (`localhost`, `127.0.0.1` ou `file://`) ou quando a URL traz `?debug=1`.
-Com DEBUG ligado, tudo que acontece no reconhecimento vai para o console
-com o prefixo `[voz]` (eventos e tempos de cada sessão, resultados com
-confiança, decisão do casamento de cada palavra, estado do acompanhamento,
-batimento a cada 3 s) e o botão "📋 Copiar diagnóstico" copia o log inteiro
-para colar num chat. No site publicado (DEBUG desligado) nada é registrado
-e o botão não aparece.
+No site publicado (DEBUG desligado) nada é registrado e o botão
+"📋 Copiar diagnóstico" não aparece.
+
+Com DEBUG ligado o log tem **dois níveis**, para o diagnóstico não virar um
+paredão de linhas:
+
+| Nível | O que entra | Quando é registrado |
+| --- | --- | --- |
+| resumo | início da história, troca de página, ciclo de vida e reinícios da sessão, avanços da leitura, dicas, pulos, erros | sempre |
+| minucioso | cada resultado com suas alternativas e confiança, a decisão do casamento palavra a palavra, o estado do acompanhamento, batimentos | fica num anel dos 80 últimos eventos; só vai para o log quando a leitura trava |
+
+A leitura é considerada **travada** quando a palavra destacada não avança há
+mais de 3 s e o microfone captou fala nesse tempo (ou seja, a criança falou e
+nada aconteceu). Nesse instante o log ganha uma linha `TRAVOU` com a
+fotografia completa do estado (página, palavra atual, ponteiros do
+acompanhamento, idade da sessão, tempo sem resposta, nível do microfone),
+despeja o anel como contexto do que veio antes e passa a registrar tudo até a
+linha `DESTRAVOU`, que diz o que fez a leitura andar e quanto tempo demorou.
+O botão copia esse log inteiro.
 
 ## Testes
 
@@ -112,13 +126,16 @@ cenários que já travaram.
    diferença (Levenshtein). Leitura silabada ("ca cho rro") também casa.
 4. As palavras ouvidas avançam um ponteiro pelo texto, sempre a partir da
    palavra que está destacada na tela (o ponteiro nunca volta, mesmo que o
-   navegador reinicie a sessão de reconhecimento). Uma palavra não entendida
-   pode ser pulada para a leitura não travar em "o", "e", "de", mas só com
-   casamento exato da palavra seguinte; as regras tolerantes (fonética,
-   "1" = um/uma, letra inicial) valem apenas para a palavra esperada. Uma
-   palavra repetida ("uma uma") só pode casar com a próxima esperada.
-   Palavras de até duas letras ditas sozinhas costumam voltar como uma
-   letra ("de" → "D"); isso também vale.
+   navegador reinicie a sessão de reconhecimento). **A busca alcança sempre a
+   palavra destacada**: enquanto uma parcial viva avança a tela, o ponteiro
+   dos resultados finais fica para trás, e a busca precisa atravessar as
+   palavras já lidas para chegar na atual. Uma palavra não entendida pode ser
+   pulada para a leitura não travar em "o", "e", "de", mas só com casamento
+   exato; as regras tolerantes (fonética, "1" = um/uma, letra inicial) valem
+   para a palavra esperada e para a destacada na tela. Uma palavra repetida
+   ("uma uma") só pode casar com a próxima esperada. Palavras de até duas
+   letras ditas sozinhas costumam voltar como uma letra ("de" → "D"); isso
+   também vale.
 5. Se uma tentativa inteira não avança nada, aparece a dica "Tente de novo:
    palavra" com um botão para ouvir a pronúncia. Na segunda tentativa sem
    sucesso a palavra é marcada em amarelo (pulada) e a leitura segue, para a

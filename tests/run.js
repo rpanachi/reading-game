@@ -138,6 +138,40 @@ check('rótulo parcial', JSON.stringify(calls[0]), JSON.stringify(['um dia', fal
 check('rótulo da nova parcial', JSON.stringify(calls[1]), JSON.stringify(['de', false]));
 check('rótulo final (parcial vazia não apaga)', JSON.stringify(calls[2]), JSON.stringify(['de patinete', true]));
 
+/* ---------- travamento: ponteiro dos finais atrás da palavra na tela ---------- */
+// Enquanto uma parcial viva avança a tela, o ponteiro dos finais fica atrás.
+// Antes, a janela de busca saía de lá e cobria só 2 palavras, então a palavra
+// destacada ficava FORA da janela: a criança repetia e nada acontecia, e só
+// dizer a palavra atual + a seguinte (enunciado maior → final → ponteiro em dia)
+// destravava. Agora a busca alcança sempre a palavra da tela.
+const alvo7 = targetsOf('Era uma vez um menino chamado Leo.');   // #3 um #4 menino #5 chamado
+t = new S.Tracker(alvo7);
+t.update([], [[say('era uma vez')]]);
+check('parcial longa avança a tela', t.progress, 3);
+check('ponteiro dos finais fica atrás', t.committed, 0);
+t.update([], [[say('um')]]);
+check('palavra atual casa mesmo com ponteiro 3 atrás', t.progress, 4);
+t.update([], [[say('menino')]]);
+check('e a próxima também', t.progress, 5);
+// pronúncia aproximada da palavra atual (fonética) continua valendo
+t = new S.Tracker(alvo7);
+t.update([], [[say('era uma vez')]]);
+t.update([], [[say('um')]]);
+t.update([], [[say('meninu')]]);
+check('pronúncia aproximada da palavra atual casa', t.progress, 5);
+// e o atalho antigo (palavra atual + seguinte juntas) segue funcionando
+t = new S.Tracker(alvo7);
+t.update([], [[say('era uma vez')]]);
+t.update([], [[say('um menino')]]);
+check('palavra atual + seguinte juntas', t.progress, 5);
+// nada de pular palavra por parecença dentro da janela alargada
+t = new S.Tracker(targetsOf('Você me dá um pouco de água? Estou com sede!'));
+t.update([[say('você')], [say('me')]], []);
+t.update([[say('você')], [say('me')]], [[say('um pouco de água')]]);
+check('parcial "um pouco de água" chega em "estou" (2)', t.progress, 7);
+t.update([[say('você')], [say('me')], [say('um pouco de água'), say('com um pouco de água')]], []);
+check('alternativa "com ..." não pula "Estou" (2)', t.progress, 7);
+
 /* ---------- vigia da sessão (simulado, sem navegador) ---------- */
 function fakeListener({ ageMs, sinceFirstMs, sinceResultMs, voicedMs, quietMs, pending }) {
   const l = new S.Listener({});

@@ -6,8 +6,10 @@
   const $$ = (s) => Array.from(document.querySelectorAll(s));
   const D = window.GAME_DATA;
   const VOICES = { francisca: { label: 'feminina', gender: 'f' }, antonio: { label: 'masculina', gender: 'm' } };
-  const APP_VERSION = '12'; // aparece no rodapé da página de leitura; suba junto com o ?v= do index.html
+  const APP_VERSION = '13'; // aparece no rodapé da página de leitura; suba junto com o ?v= do index.html
   const log = (tag, msg, data) => DIAG.log(tag, msg, data);
+  const detail = (tag, msg, data) => DIAG.detail(tag, msg, data);
+  const STUCK_MS = 3000;   // palavra sem avanço, com a criança falando: liga o diagnóstico minucioso
 
   const state = {
     sel: { character: null, vehicle: null, place: null, situation: null, dialog: null, ending: null },
@@ -15,6 +17,7 @@
     listening: false, micDenied: false,
     startedAt: 0, wordsRead: 0,
     voice: 'francisca', tracker: null, missFinals: 0, speaking: false, waiting: false,
+    progressAt: 0,   // quando a palavra atual passou a ser a atual (detecta travamento)
   };
   try { const v = localStorage.getItem('voz'); if (v && VOICES[v]) state.voice = v; } catch (_) { /* sem storage */ }
 
@@ -109,12 +112,12 @@
   /* ---------- reconhecimento de voz ---------- */
   const listener = new SPEECH.Listener({
     onWords(finals, interims, lastText, lastIsFinal) {
-      if (!state.story || !state.tracker) { log('app', 'resultado ignorado: sem história/tracker'); return; }
-      log('app', `onWords finais=${finals.length} parciais=${interims.length} texto="${lastText || ''}"${lastIsFinal ? ' FINAL' : ''} falando=${state.speaking} progresso=${state.progress}/${state.targets.length} atual="${currentWord()}"`);
+      if (!state.story || !state.tracker) { detail('app', 'resultado ignorado: sem história/tracker'); return; }
+      detail('app', `onWords finais=${finals.length} parciais=${interims.length} texto="${lastText || ''}"${lastIsFinal ? ' FINAL' : ''} falando=${state.speaking} progresso=${state.progress}/${state.targets.length} atual="${currentWord()}"`);
       // A contabilidade roda sempre (inclusive no aviso de fim de sessão que
       // chega enquanto o jogo fala); só a tela e as dicas esperam o silêncio.
       const r = state.tracker.update(finals, interims);
-      if (state.speaking) { log('app', 'jogo está falando: tela não atualizada'); return; }
+      if (state.speaking) { detail('app', 'jogo está falando: tela não atualizada'); return; }
       // "Ouvi: …" mostra o que o reconhecedor entendeu (útil para diagnosticar);
       // "…" no fim significa resultado parcial, ainda em revisão. Quando a
       // interpretação difere do texto cru (ex.: "1" → "um"), ela aparece também.
@@ -168,11 +171,42 @@
   listener.meter = meter;
 
   // "Entendendo..." enquanto há fala captada ainda sem resposta do reconhecedor,
-  // para ninguém repetir a palavra antes da hora.
+  // para ninguém repetir a palavra antes da hora. O mesmo timer vigia o
+  // travamento da palavra atual, que liga o diagnóstico minucioso.
   setInterval(() => {
     const w = listener.waiting();
     if (w !== state.waiting) { state.waiting = w; if (state.story && !state.speaking) setStatus(); }
+    checkStuck();
   }, 250);
+
+  /** Fotografia do estado do jogo + reconhecimento, para o log de travamento. */
+  function snapshot() {
+    const t = state.tracker;
+    return {
+      pagina: state.story ? `${state.index + 1}/${state.story.slides.length}` : '-',
+      palavraAtual: `#${state.progress} "${currentWord()}"`,
+      faltam: state.targets.slice(state.progress).join(' '),
+      tracker: t ? { progresso: t.progress, ponteiroFinais: t.committed, finaisAplicados: t.applied, parcialAvancou: t.liveAdvanced, ultimoErro: t.lastMiss ? t.lastMiss.join(' ') : null } : null,
+      reconhecimento: listener.state(),
+      tentativasNaPalavra: state.missFinals,
+    };
+  }
+
+  /**
+   * A palavra destacada não avança há mais de 3 s e a criança falou nesse
+   * tempo: o reconhecimento não está funcionando para esta palavra. Liga o
+   * log minucioso (com o contexto dos eventos anteriores) até destravar.
+   */
+  function checkStuck() {
+    if (!DIAG.enabled) return;
+    if (!state.story || state.speaking || !state.listening) return;
+    if (state.progress >= state.targets.length) return;
+    const since = Date.now() - state.progressAt;
+    const falou = meter.lastVoiceAt > state.progressAt;
+    if (!DIAG.stuck() && since > STUCK_MS && falou) {
+      DIAG.beginStuck(`palavra #${state.progress} "${currentWord()}" sem avançar há ${(since / 1000).toFixed(1)}s (houve fala)`, snapshot());
+    }
+  }
 
   function startListening() {
     if (!SPEECH.supported) return;
@@ -286,6 +320,7 @@
     const slide = state.story.slides[i];
     state.index = i;
     state.progress = 0;
+    state.progressAt = Date.now();
     state.missFinals = 0;
     state.tokens = SPEECH.tokenize(slide.text);
     state.targets = state.tokens.filter((t) => t.wordIndex !== null).map((t) => t.norm);
@@ -348,6 +383,8 @@
     const delta = clamped - state.progress;
     if (delta <= 0) return;
     log('app', `progresso ${state.progress}→${clamped}/${total} (${source}) próxima="${state.targets[clamped] || '-'}"`);
+    if (DIAG.stuck()) DIAG.endStuck(`avançou ${state.progress}→${clamped} por ${source} depois de ${((Date.now() - state.progressAt) / 1000).toFixed(1)}s`, { ouvi: listener.lastText });
+    state.progressAt = Date.now();
     state.progress = clamped;
     // Só um pulo manual move o ponto de partida do Tracker. Fazer isso a cada
     // avanço por voz empurrava o ponteiro para depois de palavras que ainda
