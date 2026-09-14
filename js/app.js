@@ -6,7 +6,7 @@
   const $$ = (s) => Array.from(document.querySelectorAll(s));
   const D = window.GAME_DATA;
   const VOICES = { francisca: { label: 'feminina', gender: 'f' }, antonio: { label: 'masculina', gender: 'm' } };
-  const APP_VERSION = '14'; // aparece no rodapé da página de leitura; suba junto com o ?v= do index.html
+  const APP_VERSION = '15'; // aparece no rodapé da página de leitura; suba junto com o ?v= do index.html
   const log = (tag, msg, data) => DIAG.log(tag, msg, data);
   const detail = (tag, msg, data) => DIAG.detail(tag, msg, data);
   const STUCK_MS = 3000;   // palavra sem avanço, com a criança falando: liga o diagnóstico minucioso
@@ -18,7 +18,8 @@
     startedAt: 0, wordsRead: 0,
     voice: 'francisca', tracker: null, missFinals: 0, speaking: false, waiting: false,
     progressAt: 0,   // quando a palavra atual passou a ser a atual
-    firstVoiceAt: 0, // primeira voz captada desde então (o travamento conta a partir daqui)
+    attemptFrom: 0,  // trechos de voz iniciados a partir daqui contam como tentativa de ler a palavra atual
+    firstVoiceAt: 0, // início da primeira tentativa (o travamento conta a partir daqui)
   };
   try { const v = localStorage.getItem('voz'); if (v && VOICES[v]) state.voice = v; } catch (_) { /* sem storage */ }
 
@@ -151,6 +152,12 @@
         setProgress(state.tracker.progress, 'voz');
         state.missFinals = 0;
         hideHint();
+      } else if (r.echo) {
+        // Só repetiu a palavra anterior (a tela ainda não tinha avançado quando
+        // ela a disse): a tentativa da palavra atual ainda não começou.
+        detail('app', `eco da palavra anterior: tentativa da atual "${currentWord()}" ainda não começou`);
+        state.firstVoiceAt = 0;
+        state.attemptFrom = Date.now();
       } else if (r.miss && state.progress < state.targets.length) {
         // Uma tentativa inteira (parcial + final) não avançou a leitura.
         state.missFinals++;
@@ -189,7 +196,9 @@
     const n = Math.min(vuBars.length, Math.round(level * 25));
     vuBars.forEach((b, i) => b.classList.toggle('on', i < n));
     $('#vu').classList.toggle('voice', voice);
-    if (voice && state.story && !state.firstVoiceAt) state.firstVoiceAt = Date.now();
+    if (voice && state.story && !state.speaking && !state.firstVoiceAt) {
+      state.firstVoiceAt = SPEECH.attemptStart({ voiceOn: meter.voiceOn, voiceStartAt: meter.voiceStartAt, now: Date.now(), progressAt: state.progressAt, from: state.attemptFrom });
+    }
   });
   listener.meter = meter;
 
@@ -199,8 +208,30 @@
   setInterval(() => {
     const w = listener.waiting();
     if (w !== state.waiting) { state.waiting = w; if (state.story && !state.speaking) setStatus(); }
+    checkShortWord();
     checkStuck();
   }, 250);
+
+  /**
+   * Palavra de uma letra ("a", "e", "o") dita sozinha: o reconhecedor do
+   * Google leva 2,5 a 3 s para responder uma vogal isolada e, numa sessão
+   * nova, muitas vezes nem responde (medido: "A" de 134 ms de voz, 9,9 s
+   * travada). Se a criança disse uma coisa curta, calou e nada avançou em
+   * 1,5 s, a palavra é aceita pela voz mesmo sem o reconhecedor.
+   */
+  function checkShortWord() {
+    if (!state.story || state.speaking || !state.listening) return;
+    if (state.progress >= state.targets.length) return;
+    const target = state.targets[state.progress];
+    if (target.length !== 1) return;
+    const now = Date.now();
+    if (!SPEECH.shortBurst({ voiceOn: meter.voiceOn, voiceStartAt: meter.voiceStartAt, lastVoiceAt: meter.lastVoiceAt, now, from: state.attemptFrom })) return;
+    log('app', `palavra curta "${currentWord()}" aceita pela voz: ${meter.lastVoiceAt - meter.voiceStartAt}ms de voz há ${now - meter.voiceStartAt}ms e nenhuma resposta`, { reconhecimento: listener.state() });
+    meter.resetVoiced();   // essa fala está resolvida: o vigia não precisa reiniciar por ela
+    state.missFinals = 0;
+    hideHint();
+    setProgress(state.progress + 1, 'voz curta', { count: true, manual: true });
+  }
 
   /** Fotografia do estado do jogo + reconhecimento, para o log de travamento. */
   function snapshot() {
@@ -226,7 +257,7 @@
     if (!state.firstVoiceAt) return;                 // a criança ainda não tentou ler esta palavra
     const since = Date.now() - state.firstVoiceAt;   // conta da primeira tentativa, não da troca de palavra
     if (since <= STUCK_MS) return;
-    if ($('#hint').hidden) showHint();               // orienta: palavra curta lida junto com a seguinte
+    if ($('#hint').hidden) showHint();               // "Tente de novo" com o botão de ouvir a palavra
     if (DIAG.enabled && !DIAG.stuck()) {
       DIAG.beginStuck(`palavra #${state.progress} "${currentWord()}" sem avançar ${(since / 1000).toFixed(1)}s depois da primeira tentativa`, snapshot());
     }
@@ -278,27 +309,12 @@
     const tok = state.tokens.find((t) => t.wordIndex === state.progress);
     return tok ? tok.text.replace(/[^\p{L}\p{N}'-]/gu, '') : '';
   }
-  /**
-   * Palavras da dica. Palavra curtinha ("um", "o", "de", "em") dita sozinha o
-   * reconhecedor entende mal (vira "11", "do", "vem"); lida junto com a
-   * seguinte ("um cachorro") ele acerta. Então a dica sugere as duas.
-   */
-  function hintWords() {
-    const clean = (t) => t.text.replace(/[^\p{L}\p{N}'-]/gu, '');
-    const cur = state.tokens.find((t) => t.wordIndex === state.progress);
-    if (!cur) return [];
-    const next = state.tokens.find((t) => t.wordIndex === state.progress + 1);
-    const w = clean(cur);
-    return w.length <= 3 && next ? [w, clean(next)] : [w];
-  }
   function showHint() {
-    const words = hintWords();
-    if (!words.length) return;
-    log('app', `dica: ${words.length > 1 ? 'leia junto' : 'tente de novo'} "${words.join(' ')}"`);
+    const w = currentWord();
+    if (!w) return;
+    log('app', `dica: tente de novo "${w}"`);
     const h = $('#hint');
-    h.innerHTML = words.length > 1
-      ? `Leia as duas juntas: <b>${words.join(' ')}</b> <span class="hint-ear">🔊 ouvir</span>`
-      : `Tente de novo: <b>${words[0]}</b> <span class="hint-ear">🔊 ouvir a palavra</span>`;
+    h.innerHTML = `Tente de novo: <b>${w}</b> <span class="hint-ear">🔊 ouvir a palavra</span>`;
     h.hidden = false;
     const span = $(`#reading-text .w[data-wi="${state.progress}"]`);
     if (span) { span.classList.remove('shake'); void span.offsetWidth; span.classList.add('shake'); }
@@ -335,6 +351,9 @@
     const done = () => {
       state.speaking = false;
       $('#btn-listen').disabled = false;
+      // A voz do jogo que o microfone captou não é tentativa da criança.
+      state.firstVoiceAt = 0;
+      state.attemptFrom = Date.now() + 300;
       if (wasListening) startListening(); else setStatus();
     };
     updateEngineLabel();
@@ -360,6 +379,7 @@
     state.index = i;
     state.progress = 0;
     state.progressAt = Date.now();
+    state.attemptFrom = state.progressAt + 250;
     state.firstVoiceAt = 0;
     state.missFinals = 0;
     state.tokens = SPEECH.tokenize(slide.text);
@@ -425,6 +445,7 @@
     log('app', `progresso ${state.progress}→${clamped}/${total} (${source}) próxima="${state.targets[clamped] || '-'}"`);
     if (DIAG.stuck()) DIAG.endStuck(`avançou ${state.progress}→${clamped} por ${source} depois de ${((Date.now() - state.progressAt) / 1000).toFixed(1)}s`, { ouvi: listener.lastText });
     state.progressAt = Date.now();
+    state.attemptFrom = state.progressAt + 250;   // o rabo da palavra que acabou de casar não é tentativa da próxima
     state.firstVoiceAt = 0;
     state.progress = clamped;
     // Só um pulo manual move o ponto de partida do Tracker. Fazer isso a cada
@@ -512,7 +533,7 @@
   $('#btn-mic').addEventListener('click', toggleMic);
   $('#btn-listen').addEventListener('click', () => speakText(state.story.slides[state.index].text));
   $('#btn-diag').addEventListener('click', copyDiagnostics);
-  $('#hint').addEventListener('click', () => speakText(hintWords().join(' ')));
+  $('#hint').addEventListener('click', () => speakText(currentWord()));
   $('#voice').value = state.voice;
   $('#voice').addEventListener('change', (e) => {
     state.voice = e.target.value;
@@ -532,6 +553,7 @@
   // O botão de diagnóstico só existe em modo DEBUG (local ou ?debug=1).
   $('#btn-diag').hidden = !DIAG.enabled;
   log('app', `versão ${APP_VERSION} carregada`, { reconhecimento: SPEECH.supported, recognizer: SPEECH.recognizerName(), voz: SPEECH.ttsSupported });
+  if (DIAG.enabled) SPEECH.probeLocal();
   renderComposer();
   updateMicUI();
   updateEngineLabel();

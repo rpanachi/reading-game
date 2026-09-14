@@ -93,10 +93,14 @@ window.SPEECH = (function () {
   // nasal ("no" → "do"). Para alvos de até 2 letras aceitamos a fala curta
   // que TERMINA com o alvo, mais estas trocas conhecidas.
   const SHORT_SWAP = { no: 'do', na: 'da', ne: 'de', nu: 'du' };
+  // Uma vogal sozinha ("e", "o", "a") volta trocada por outra vogal ("e" → "o"):
+  // entre elas vale qualquer uma. Só se aplica à palavra esperada/destacada.
+  const VOWEL = { a: 1, e: 1, o: 1 };
 
   function why(a, b) {
     if (a === b) return 'igual';
     if (NUM_EQUIV[a] === b) return 'número';
+    if (VOWEL[a] && VOWEL[b]) return 'vogal';
     if (b.length <= 2 && a.length <= 4 && a.length > b.length && a.endsWith(b)) return 'sufixo';
     if (SHORT_SWAP[b] === a) return 'troca n/d';
     const pa = key(a), pb = key(b);
@@ -155,6 +159,21 @@ window.SPEECH = (function () {
     return t;
   }
 
+  /**
+   * O enunciado só repete o que já foi lido? A criança costuma repetir a
+   * palavra anterior porque a tela ainda não tinha avançado quando ela a
+   * disse ("brinquedo" de novo, "um cachorro" de novo). Isso não é uma
+   * tentativa da palavra atual: não conta como erro nem como início do
+   * travamento. Vale a repetição da última palavra (uma ou mais vezes) ou
+   * das últimas N palavras na ordem.
+   */
+  function isEcho(words, target, upto) {
+    if (!words.length || !upto) return false;
+    if (words.every((w) => why(w, target[upto - 1]))) return true;
+    if (words.length > upto) return false;
+    return words.every((w, i) => !!why(w, target[upto - words.length + i]));
+  }
+
   /** Versão simples (recalcula do zero); usada só em testes. */
   function computeProgress(target, results) {
     let p = 0;
@@ -210,7 +229,7 @@ window.SPEECH = (function () {
     update(finals, interims) {
       const before = this.progress;
       const len = this.target.length;
-      let newFinal = false, misses = 0;
+      let newFinal = false, misses = 0, echo = false;
       for (; this.applied < finals.length; this.applied++) {
         // Um resultado final é casado a partir do ponteiro dos finais anteriores
         // (não do progresso mostrado), senão sua própria versão parcial, já
@@ -220,10 +239,14 @@ window.SPEECH = (function () {
         newFinal = true;
         this.progress = Math.max(this.progress, Math.min(p, len));
         this.committed = Math.max(this.committed, p, this.progress);
-        if (this.progress === beforeThis && !this.liveAdvanced) {
-          misses++;
+        if (this.progress === beforeThis && !this.liveAdvanced && this.progress < len) {
           const words = finals[this.applied][0] || [];
-          this.lastMiss = words.length && words.length <= 3 ? words : null;
+          if (isEcho(words, this.target, this.progress)) {
+            echo = true;   // só repetiu a palavra anterior: não é tentativa da atual
+          } else {
+            misses++;
+            this.lastMiss = words.length && words.length <= 3 ? words : null;
+          }
         } else {
           this.lastMiss = null;
         }
@@ -233,14 +256,18 @@ window.SPEECH = (function () {
       interims.forEach((alts, i) => { p = this._best(alts, p, `parcial#${i}`); });
       const pInterim = Math.min(p, len);
       if (pInterim > this.progress) { this.progress = pInterim; this.liveAdvanced = true; this.lastMiss = null; }
+      else if (interims.length && this.progress < len) {
+        const live = interims[interims.length - 1][0] || [];
+        if (isEcho(live, this.target, this.progress)) echo = true;
+      }
       if (!interims.length) {
         // Sem parcial viva (foi finalizada ou a sessão caiu), o ponteiro alcança
         // o que está na tela: a próxima fala casa a partir da palavra atual.
         this.committed = Math.max(this.committed, this.progress);
         this.liveAdvanced = false;
       }
-      const out = { advanced: this.progress > before, newFinal, miss: misses > 0, done: this.progress >= len };
-      detail('tracker', `progresso ${before}→${this.progress}/${len} committed=${this.committed} aplicados=${this.applied} vivoAvancou=${this.liveAdvanced} ultimoErro=${this.lastMiss ? '[' + this.lastMiss.join(' ') + ']' : '-'} → ${out.advanced ? 'avançou' : out.miss ? 'ERRO (tentativa não entendida)' : 'sem mudança'}${out.done ? ' PÁGINA COMPLETA' : ''}`);
+      const out = { advanced: this.progress > before, newFinal, miss: misses > 0, echo: echo && this.progress === before, done: this.progress >= len };
+      detail('tracker', `progresso ${before}→${this.progress}/${len} committed=${this.committed} aplicados=${this.applied} vivoAvancou=${this.liveAdvanced} ultimoErro=${this.lastMiss ? '[' + this.lastMiss.join(' ') + ']' : '-'} → ${out.advanced ? 'avançou' : out.miss ? 'ERRO (tentativa não entendida)' : out.echo ? 'eco (repetiu palavra já lida)' : 'sem mudança'}${out.done ? ' PÁGINA COMPLETA' : ''}`);
       return out;
     }
   }
@@ -252,6 +279,10 @@ window.SPEECH = (function () {
       this.level = 0;
       this.voicedMs = 0;    // tempo com voz desde o último resultado (vigia de travamento)
       this.lastVoiceAt = 0; // último instante com voz (Date.now), para renovar só no silêncio
+      this.voiceOn = false;
+      this.voiceStartAt = 0;   // início do trecho de voz atual (trechos separados por ≥400 ms de pausa)
+      this.attempts = 0;       // trechos de voz iniciados desde o último resultado (= tentativas de fala)
+      this.firstAttemptAt = 0; // início do primeiro desses trechos
       this.stream = null;
       this.ctx = null;
       this.raf = 0;
@@ -278,10 +309,7 @@ window.SPEECH = (function () {
           for (let i = 0; i < this.buf.length; i++) { const d = (this.buf[i] - 128) / 128; sum += d * d; }
           const rms = Math.sqrt(sum / this.buf.length);
           const dt = now - this._last; this._last = now;
-          const voice = rms > 0.04;
-          if (voice) { this.voicedMs += dt; this.lastVoiceAt = Date.now(); }
-          this.level = rms;
-          this.onLevel && this.onLevel(rms, voice);
+          this._sample(rms, dt, Date.now());
           this.raf = requestAnimationFrame(tick);
         };
         this.raf = requestAnimationFrame(tick);
@@ -292,12 +320,31 @@ window.SPEECH = (function () {
         return false;
       }
     }
-    resetVoiced() { this.voicedMs = 0; }
+    /** Uma amostra do microfone (separado do laço para os testes). */
+    _sample(rms, dt, t) {
+      const voice = rms > 0.04;
+      if (voice) {
+        if (!this.voiceOn && (!this.lastVoiceAt || t - this.lastVoiceAt >= 400)) {
+          // borda de subida depois de uma pausa: trecho de voz novo (uma tentativa)
+          this.voiceStartAt = t;
+          this.attempts++;
+          if (!this.firstAttemptAt) this.firstAttemptAt = t;
+        }
+        this.voiceOn = true;
+        this.voicedMs += dt; this.lastVoiceAt = t;
+      } else {
+        this.voiceOn = false;
+      }
+      this.level = rms;
+      this.onLevel && this.onLevel(rms, voice);
+    }
+    /** Chegou um resultado: zera a voz e as tentativas sem resposta. */
+    resetVoiced() { this.voicedMs = 0; this.attempts = 0; this.firstAttemptAt = 0; }
     stop() {
       cancelAnimationFrame(this.raf);
       if (this.stream) { this.stream.getTracks().forEach((t) => t.stop()); this.stream = null; log('medidor', 'microfone fechado'); }
       if (this.ctx) { try { this.ctx.close(); } catch (_) { /* ignore */ } this.ctx = null; }
-      this.level = 0; this.voicedMs = 0;
+      this.level = 0; this.voiceOn = false; this.resetVoiced();
       this.onLevel && this.onLevel(0, false);
     }
   }
@@ -406,8 +453,9 @@ window.SPEECH = (function () {
     /**
      * Vigia (1x por segundo). Três proteções, todas só em momento de silêncio
      * do microfone para não cortar uma palavra ao meio:
-     *  1) voz captada pelo microfone e nenhum resultado em 5s: a sessão travou;
-     *  2) o reconhecedor avisou fala e não respondeu em 8s;
+     *  1) voz captada pelo microfone e nenhum resultado 2 s depois de calar
+     *     (1,2 s numa sessão nova), ou repetição sem resposta: a sessão travou;
+     *  2) o reconhecedor avisou fala e não respondeu em 8s (3 s numa sessão nova);
      *  3) renovação preventiva: o Chrome para de responder ~60s depois do
      *     primeiro resultado da sessão (sem disparar onend), então a sessão é
      *     renovada a partir dos 45s numa pausa (aos 55s mesmo com parcial pendente).
@@ -418,12 +466,15 @@ window.SPEECH = (function () {
       const now = Date.now();
       const silentFor = now - this._lastResult;
       const age = now - (this._firstResultAt || this._startedAt);
-      const voiced = this.meter ? this.meter.voicedMs : 0;
-      const quietFor = this.meter && this.meter.lastVoiceAt ? now - this.meter.lastVoiceAt : Infinity;
+      const m = this.meter;
+      const voiced = m ? m.voicedMs : 0;
+      const quietFor = m && m.lastVoiceAt ? now - m.lastVoiceAt : Infinity;
+      const attempts = m ? m.attempts : 0;
+      const sinceAttempt = m && m.firstAttemptAt ? now - m.firstAttemptAt : 0;
       const pending = this.interimResults.length > 0;
       this._ticks++;
       if (this._ticks % 6 === 0) {
-        detail('batimento', `sessão#${this.session} rec=${!!this.rec} idade=${now - this._startedAt}ms desde1ºResultado=${this._firstResultAt ? now - this._firstResultAt + 'ms' : '-'} semResultado=${silentFor}ms vozSemResposta=${Math.round(voiced)}ms quietoHá=${quietFor === Infinity ? '-' : quietFor + 'ms'} falaSemResposta=${this._speechAt ? now - this._speechAt + 'ms' : '-'} nível=${this.meter ? this.meter.level.toFixed(3) : '-'} finais=${this.finalResults.length} parciais=${this.interimResults.length}`);
+        detail('batimento', `sessão#${this.session} rec=${!!this.rec} idade=${now - this._startedAt}ms desde1ºResultado=${this._firstResultAt ? now - this._firstResultAt + 'ms' : '-'} semResultado=${silentFor}ms vozSemResposta=${Math.round(voiced)}ms tentativas=${attempts}${sinceAttempt ? ` (1ª há ${sinceAttempt}ms)` : ''} quietoHá=${quietFor === Infinity ? '-' : quietFor + 'ms'} falaSemResposta=${this._speechAt ? now - this._speechAt + 'ms' : '-'} nível=${m ? m.level.toFixed(3) : '-'} finais=${this.finalResults.length} parciais=${this.interimResults.length}`);
       }
       if (!this.rec) { if (now - this._startedAt > 3000) { log('vigia', 'sem sessão há mais de 3s, recriando'); this._spawn(); } return; }
       const quiet = quietFor > 800;
@@ -433,8 +484,14 @@ window.SPEECH = (function () {
       // reconhecedor travou nesse enunciado; reinicia já, antes que ela repita.
       // Numa sessão que nunca respondeu a paciência é menor (1,2 s).
       if (this.waiting() && quietFor > (fresh ? 1200 : 2000)) { this.restart(`fala de ${Math.round(voiced)}ms sem resposta ${(quietFor / 1000).toFixed(1)}s depois de terminar${fresh ? ' (sessão nova)' : ''}`); return; }
-      // Criança repetindo sem parar (voz acumulada) e nada chega há 4 s: o
-      // reconhecedor emudeceu; reinicia mesmo sem pausa, ela já está repetindo.
+      // A criança já repetiu (2+ trechos de voz desde o último resultado) e nada
+      // chegou 2,5 s depois do primeiro: o reconhecedor não está ouvindo (medido:
+      // ele fica mudo de 4 a 15 s com uma parcial aberta enquanto ela repete uma
+      // palavra curta; a sessão nova, aberta no meio da repetição, responde em
+      // menos de 1 s). Reinicia já, sem esperar pausa.
+      if (attempts >= 2 && sinceAttempt > 2500 && voiced > 250) { this.restart(`repetiu ${attempts}x (${Math.round(voiced)}ms de voz) sem nenhuma resposta há ${(sinceAttempt / 1000).toFixed(1)}s`); return; }
+      // Uma fala longa sem pausa (voz acumulada) e nada chega há 4 s: o
+      // reconhecedor emudeceu; reinicia mesmo sem pausa.
       if (voiced > 1200 && silentFor > 4000) { this.restart(`${Math.round(voiced)}ms de voz sem nenhuma resposta há ${(silentFor / 1000).toFixed(1)}s`); return; }
       // O próprio reconhecedor avisou fala e não respondeu: 3 s numa sessão nova, 8 s nas outras.
       if (this._speechAt && now - this._speechAt > (fresh ? 3000 : 8000) && quiet) { this.restart(`fala detectada sem resposta há ${Math.round((now - this._speechAt) / 1000)}s${fresh ? ' (sessão nova)' : ''}`); return; }
@@ -455,6 +512,8 @@ window.SPEECH = (function () {
         reinicios: this.restarts,
         esperandoResposta: this.waiting(),
         vozSemRespostaMs: m ? Math.round(m.voicedMs) : null,
+        tentativasSemResposta: m ? m.attempts : null,
+        primeiraTentativaHaMs: m && m.firstAttemptAt ? now - m.firstAttemptAt : null,
         quietoHaMs: m && m.lastVoiceAt ? now - m.lastVoiceAt : null,
         nivelMic: m ? Number(m.level.toFixed(3)) : null,
         ultimoTexto: this.lastText || '',
@@ -464,7 +523,7 @@ window.SPEECH = (function () {
     /** Há fala captada pelo microfone ainda sem nenhum resultado do reconhecedor? */
     waiting() {
       const m = this.meter;
-      return !!(this.active && this.rec && m && m.lastVoiceAt > this._lastResult && m.voicedMs > 400);
+      return !!(this.active && this.rec && m && m.lastVoiceAt > this._lastResult && m.voicedMs > 250);
     }
 
     restart(reason) {
@@ -519,14 +578,23 @@ window.SPEECH = (function () {
      */
     reset() {
       const pending = this.interimResults.length > 0;
-      const age = this.rec ? Date.now() - this._startedAt : 0;
+      const now = Date.now();
+      const age = this.rec ? now - this._startedAt : 0;
+      const sinceFirst = this.rec && this._firstResultAt ? now - this._firstResultAt : 0;
       const lastWords = pending ? (this.interimResults[this.interimResults.length - 1][0] || []).length : 0;
       this._ignoreBefore = pending ? this._seen - 1 : this._seen;
       this._strip = pending ? { index: this._seen - 1, words: lastWords } : null;
       this._nextFinal = Math.max(this._nextFinal, this._ignoreBefore);
       this.finalResults = [];
       this.interimResults = [];
-      log('ouvinte', `reset (nova página) idade=${age}ms sessão=mantida${pending ? ` parcial viva: descarta ${lastWords} palavra(s) já ouvidas` : ''}`);
+      // O Chrome para de responder ~60 s depois do primeiro resultado da sessão.
+      // Uma sessão com mais de 30 s não aguenta a página seguinte inteira, e a
+      // renovação no meio da página cairia justo numa pausa entre palavras
+      // (medido: caiu 1,5 s depois da troca de página, na primeira palavra).
+      // A troca de página é a melhor hora: a criança ainda vai olhar o desenho.
+      const renew = sinceFirst > 30000 || (this.rec && !this._firstResultAt && age > 50000);
+      log('ouvinte', `reset (nova página) idade=${age}ms desde1ºResultado=${sinceFirst}ms sessão=${renew ? 'renovada' : 'mantida'}${pending ? ` parcial viva: descarta ${lastWords} palavra(s) já ouvidas` : ''}`);
+      if (renew) this.restart(`nova página com sessão de ${Math.round((sinceFirst || age) / 1000)}s`);
     }
 
     stop() {
@@ -592,6 +660,54 @@ window.SPEECH = (function () {
 
   function stopSpeaking() { if (ttsSupported) window.speechSynthesis.cancel(); }
 
+  /**
+   * Quando começou a tentativa de ler a palavra atual, para o detector de
+   * travamento. Conta um trecho de voz que COMEÇOU depois que a palavra virou
+   * a atual (`from`, um pouco depois da troca): o rabo da palavra anterior,
+   * ainda soando quando a tela avançou, não conta. Se a voz vinha de antes
+   * da troca e continua 600 ms depois dela, a criança emendou a palavra
+   * seguinte no mesmo fôlego: a tentativa começou nesses 600 ms.
+   * Devolve 0 enquanto não há tentativa.
+   */
+  function attemptStart({ voiceOn, voiceStartAt, now, progressAt, from }) {
+    if (!voiceOn || !voiceStartAt) return 0;
+    if (voiceStartAt >= from) return voiceStartAt;
+    if (voiceStartAt < progressAt && now - progressAt >= 600) return progressAt + 600;
+    return 0;
+  }
+
+  /**
+   * Palavra de UMA letra ("a", "e", "o"): a criança disse uma coisa curta
+   * (trecho de voz de 50 a 900 ms, iniciado depois que a palavra virou a
+   * atual), calou há 600 ms e 1,5 s depois do início nada avançou. Medido:
+   * o reconhecedor do Google demora 2,5 a 3 s para responder uma vogal
+   * isolada e numa sessão nova muitas vezes nem responde; esperar isso a
+   * cada artigo travava a leitura. Nesse caso a palavra é aceita pela voz.
+   */
+  function shortBurst({ voiceOn, voiceStartAt, lastVoiceAt, now, from }) {
+    if (voiceOn || !voiceStartAt || voiceStartAt < from) return false;
+    const dur = lastVoiceAt - voiceStartAt;
+    if (dur < 50 || dur > 900) return false;
+    return now - voiceStartAt >= 1500 && now - lastVoiceAt >= 600;
+  }
+
+  /**
+   * Só diagnóstico: o navegador oferece reconhecimento no próprio aparelho
+   * (Chrome 139+: `available`/`processLocally`/`phrases`) para pt-BR? Se um
+   * dia oferecer, dá para dizer ao reconhecedor as palavras da página.
+   */
+  function probeLocal() {
+    if (!supported) return;
+    const info = { available: typeof SR.available === 'function', install: typeof SR.install === 'function', processLocally: 'processLocally' in SR.prototype, phrases: 'phrases' in SR.prototype };
+    log('local', 'API de reconhecimento no aparelho', info);
+    if (!info.available) return;
+    try {
+      SR.available({ langs: ['pt-BR'], processLocally: true })
+        .then((r) => log('local', `pt-BR no aparelho: ${r}`))
+        .catch((e) => log('local', 'available() falhou', String(e)));
+    } catch (e) { log('local', 'available() lançou', String(e)); }
+  }
+
   /** Nome do motor de reconhecimento que o navegador usa (só para informar). */
   function recognizerName() {
     if (!supported) return '';
@@ -602,5 +718,5 @@ window.SPEECH = (function () {
     return 'do navegador';
   }
 
-  return { supported, ttsSupported, normalize, tokenize, phon, similar, why, matchProgress, computeProgress, Tracker, Meter, Listener, speak, stopSpeaking, pickVoice, recognizerName };
+  return { supported, ttsSupported, normalize, tokenize, phon, similar, why, isEcho, matchProgress, computeProgress, attemptStart, shortBurst, Tracker, Meter, Listener, speak, stopSpeaking, pickVoice, recognizerName, probeLocal };
 })();

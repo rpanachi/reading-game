@@ -76,14 +76,20 @@ paredão de linhas:
 | resumo | início da história, troca de página, ciclo de vida e reinícios da sessão, avanços da leitura, dicas, pulos, erros | sempre |
 | minucioso | cada resultado com suas alternativas e confiança, a decisão do casamento palavra a palavra, o estado do acompanhamento, batimentos | fica num anel dos 80 últimos eventos; só vai para o log quando a leitura trava |
 
-A leitura é considerada **travada** quando 3 s depois da primeira voz captada
-para a palavra destacada nada avançou (o relógio conta da primeira tentativa,
-não da troca de palavra, para uma pausa antes de ler não virar alarme falso). Nesse instante o log ganha uma linha `TRAVOU` com a
+A leitura é considerada **travada** quando 3 s depois da primeira tentativa de
+ler a palavra destacada nada avançou. A tentativa é um trecho de voz que
+**começou** depois da troca de palavra: o rabo da palavra anterior (ainda
+soando quando a tela avançou) e a repetição da palavra anterior (a criança
+a repete porque a tela demorou a avançar; o acompanhamento reconhece o eco)
+não contam, senão viravam alarmes falsos. Nesse instante o log ganha uma linha `TRAVOU` com a
 fotografia completa do estado (página, palavra atual, ponteiros do
 acompanhamento, idade da sessão, tempo sem resposta, nível do microfone),
 despeja o anel como contexto do que veio antes e passa a registrar tudo até a
 linha `DESTRAVOU`, que diz o que fez a leitura andar e quanto tempo demorou.
-O botão copia esse log inteiro.
+O botão copia esse log inteiro. No carregamento, o log também diz se o
+navegador oferece reconhecimento no próprio aparelho para pt-BR
+(`SpeechRecognition.available`, Chrome 139+): se um dia oferecer, dá para
+passar ao reconhecedor as palavras da página (`phrases`).
 
 ## Testes
 
@@ -122,9 +128,13 @@ cenários que já travaram.
    tela de compor (a primeira sessão da página leva 2 s só para abrir o
    microfone e às vezes nem responde; assim ela já está aquecida quando a
    leitura começa) e a sessão **não é reiniciada ao virar a página**: uma
-   sessão nova leva de 1,6 a 6 s para dar a primeira resposta, então só os
-   resultados antigos são descartados e, se uma parcial estava viva, as
-   palavras que ela já tinha são ignoradas.
+   sessão nova leva de 0,3 a 6 s para dar a primeira resposta (e às vezes
+   nem responde à primeira palavra curta), então só os resultados antigos
+   são descartados e, se uma parcial estava viva, as palavras que ela já
+   tinha são ignoradas. A exceção é a sessão velha: o Chrome para de
+   responder ~60 s depois do primeiro resultado, então uma sessão com mais
+   de 30 s é renovada **na troca de página** (a criança ainda vai olhar o
+   desenho), e não no meio da página seguinte, numa pausa entre palavras.
 3. Cada palavra vira uma **chave fonética do português brasileiro**
    (`phon` em `js/speech.js`): "gato"/"gatu", "chamado"/"xamadu",
    "vez"/"ves", "sol"/"sou", "bem"/"ben", "falar"/"fala" viram a mesma
@@ -143,20 +153,31 @@ cenários que já travaram.
    sozinhas voltam do reconhecedor com artefatos conhecidos, todos aceitos:
    uma letra só ("de" → "D"), uma consoante colada na frente ("o" → "do",
    "em" → "vem", "um" → "bum"), a troca n/d ("no" → "do") e "um um" virando
-   o número "11" (cada "1" vira um "um").
-5. Se 3 s depois da primeira tentativa (primeira voz captada desde que a
+   o número "11" (cada "1" vira um "um"), e uma vogal sozinha trocada por
+   outra ("e" → "o"). Repetir a palavra anterior (a criança a diz de novo
+   porque a tela demorou a avançar) é reconhecido como **eco**: não conta
+   como tentativa da palavra atual nem como erro. Palavra de **uma letra**
+   ("a", "e", "o"): o reconhecedor leva 2,5 a 3 s para responder uma vogal
+   isolada e numa sessão nova muitas vezes nem responde (um "A" de 134 ms
+   de voz ficou 9,9 s travado); se a criança disse uma coisa curta (50 a
+   900 ms de voz), calou e 1,5 s depois nada avançou, a palavra é aceita
+   pela voz captada, sem esperar o reconhecedor.
+5. Se 3 s depois da primeira tentativa (trecho de voz iniciado depois que a
    palavra ficou destacada) nada avançou, ou se uma tentativa inteira foi
-   finalizada sem avançar, aparece a dica com um botão para ouvir a
-   pronúncia. Para palavras de até 3 letras a dica é "Leia as duas juntas:
-   um cachorro": o reconhecedor entende mal uma palavra curta sozinha e
-   acerta quando ela vem com a seguinte. Na segunda tentativa finalizada
-   sem sucesso a palavra é marcada em amarelo (pulada) e a leitura segue.
-6. Um vigia (2x por segundo) protege a sessão. Toda fala captada tem que
-   ser respondida: se 2 s depois de a criança calar nenhum resultado chegou
+   finalizada sem avançar, aparece a dica "Tente de novo" com um botão para
+   ouvir a pronúncia da palavra. Na segunda tentativa finalizada sem sucesso
+   a palavra é marcada em amarelo (pulada) e a leitura segue. A leitura é
+   sempre de uma palavra por vez; duas ou três ditas juntas também casam.
+6. Um vigia (2x por segundo) protege a sessão. Toda fala captada (a partir
+   de 250 ms de voz) tem que ser respondida: se 2 s depois de a criança calar nenhum resultado chegou
    (1,2 s numa sessão que ainda não respondeu nada), o reconhecedor travou
-   nesse enunciado e a sessão é reiniciada. Se a criança fica repetindo sem
-   pausa e mesmo assim nada chega em 4 s (voz acumulada acima de 1,2 s), a
-   sessão é reiniciada sem esperar silêncio, porque ela já está repetindo.
+   nesse enunciado e a sessão é reiniciada. Se a criança **repete** a
+   palavra (dois trechos de voz desde o último resultado) e nada chegou
+   2,5 s depois do primeiro, a sessão é reiniciada na hora, sem esperar
+   pausa: medido no diagnóstico, o reconhecedor do Chrome fica mudo de 4 a
+   15 s com uma parcial aberta enquanto a criança repete uma palavra curta,
+   e uma sessão nova aberta no meio da repetição responde em menos de 1 s.
+   Uma fala longa sem pausa e sem resposta em 4 s também reinicia.
    A sessão também é renovada a partir de 45 s depois do primeiro resultado,
    numa pausa, porque o Chrome para de responder por volta de 60 s sem
    avisar. Enquanto uma resposta não chega o status mostra "Entendendo...".

@@ -175,8 +175,14 @@ check('alternativa "com ..." não pula "Estou" (2)', t.progress, 7);
 /* ---------- artefatos do reconhecedor em palavras curtas (diagnóstico de 2026-09-14) ---------- */
 for (const [heard, target] of [['do', 'o'], ['no', 'o'], ['vem', 'em'], ['hem', 'em'], ['bum', 'um'], ['da', 'a'], ['do', 'no'], ['da', 'na']])
   check(`"${heard}" vale por "${target}"`, S.similar(S.normalize(heard), target), true);
-for (const [heard, target] of [['skate', 'de'], ['sol', 'o'], ['volta', 'a'], ['parque', 'e'], ['um', 'o'], ['o', 'e']])
+for (const [heard, target] of [['skate', 'de'], ['sol', 'o'], ['volta', 'a'], ['parque', 'e'], ['um', 'o']])
   check(`"${heard}" NÃO vale por "${target}"`, S.similar(S.normalize(heard), target), false);
+// vogal sozinha trocada por outra vogal ("e" → "o", diagnóstico de 2026-09-14, episódio 19)
+for (const [heard, target] of [['o', 'e'], ['a', 'o'], ['é', 'a']])
+  check(`vogal solta: "${heard}" vale por "${target}"`, S.similar(S.normalize(heard), target), true);
+check('vogal solta não vale no meio da frase (só na palavra esperada)', S.matchProgress(targetsOf('o gato e o cão'), say('o gato a o cão'), 0), 5);
+check('vogal solta: "o" não pula "gato" para casar "e"', S.matchProgress(targetsOf('o gato e o cão'), say('o o'), 1, 2, null, 1), 1);
+
 // "um um" vem como o número 11
 {
   const got = [];
@@ -190,6 +196,79 @@ for (const [heard, target] of [['skate', 'de'], ['sol', 'o'], ['volta', 'a'], ['
   t.update([[say('era uma vez')]], []);
   t.update([[say('era uma vez')]], [[['um', 'um']]]);
   check('"um um" (do 11) avança só "um"', t.progress, 4);
+}
+
+/* ---------- eco: repetir a palavra anterior não é tentativa da atual ---------- */
+{
+  const tg = targetsOf('Eu perdi meu brinquedo — disse a professora.');
+  check('eco: última palavra repetida', S.isEcho(say('brinquedo'), tg, 4), true);
+  check('eco: última palavra repetida duas vezes', S.isEcho(say('brinquedo brinquedo'), tg, 4), true);
+  check('eco: últimas duas palavras', S.isEcho(say('meu brinquedo'), tg, 4), true);
+  check('eco tolerante ("tava" por "estava")', S.isEcho(say('tava'), targetsOf('A professora estava chorando'), 3), true);
+  check('não é eco: palavra nova', S.isEcho(say('disse'), tg, 4), false);
+  check('não é eco: palavra parecida com a atual', S.isEcho(say('peda'), tg, 1), false);
+  check('não é eco no começo da página', S.isEcho(say('eu'), tg, 0), false);
+  check('não é eco: mistura repetição com palavra nova', S.isEcho(say('brinquedo disse'), tg, 4), false);
+  // episódio 25: "em" repetido depois que a tela avançou para "volta" contava como tentativa não entendida
+  t = new S.Tracker(targetsOf('Rex olhou em volta, bem curioso.'));
+  t.update([[say('olhou vem em')]], []);
+  check('"olhou vem em" avança até "volta"', t.progress, 3);
+  let r = t.update([[say('olhou vem em')], [say('em')]], []);
+  check('final "em" repetido: não é erro', r.miss, false);
+  check('final "em" repetido: é eco', r.echo, true);
+  r = t.update([[say('olhou vem em')], [say('em')]], [[say('volta')]]);
+  check('"volta" depois do eco avança', t.progress, 4);
+  check('avanço não é marcado como eco', r.echo, false);
+  // episódio 38: parcial "brinquedo" repetida enquanto a tela já mostra "disse"
+  t = new S.Tracker(tg);
+  t.update([[say('eu')], [say('peda perdi meu')]], [[say('pegando brinquedo')]]);
+  check('"pegando brinquedo" avança até "disse"', t.progress, 4);
+  r = t.update([[say('eu')], [say('peda perdi meu')]], [[say('pegando brinquedo')], [say('brinquedo')]]);
+  check('parcial "brinquedo" repetida é eco', r.echo, true);
+  r = t.update([[say('eu')], [say('peda perdi meu')]], [[say('pegando brinquedo')], [say('dice')]]);
+  check('parcial "dice" (tentativa real) não é eco', r.echo, false);
+  // erro de verdade continua contando
+  t = new S.Tracker(tg);
+  t.update([[say('eu')]], []);
+  r = t.update([[say('eu')], [say('a')]], []);
+  check('final "a" na palavra "perdi" é erro', r.miss, true);
+  // página completa: um final atrasado não é erro
+  t = new S.Tracker(targetsOf('Fim!'));
+  t.update([[say('fim')]], []);
+  r = t.update([[say('fim')], [say('curioso')]], []);
+  check('final depois da página completa não é erro', r.miss, false);
+}
+
+/* ---------- início da tentativa (âncora do travamento) ---------- */
+{
+  const T = 100000;
+  check('rabo da palavra anterior não conta', S.attemptStart({ voiceOn: true, voiceStartAt: T - 500, now: T + 200, progressAt: T, from: T + 250 }), 0);
+  check('trecho novo depois da troca conta', S.attemptStart({ voiceOn: true, voiceStartAt: T + 900, now: T + 950, progressAt: T, from: T + 250 }), T + 900);
+  check('voz emendada no mesmo fôlego conta a partir de 600 ms', S.attemptStart({ voiceOn: true, voiceStartAt: T - 500, now: T + 700, progressAt: T, from: T + 250 }), T + 600);
+  check('sem voz não há tentativa', S.attemptStart({ voiceOn: false, voiceStartAt: T + 900, now: T + 2000, progressAt: T, from: T + 250 }), 0);
+  check('depois de um eco só conta trecho novo', S.attemptStart({ voiceOn: true, voiceStartAt: T + 900, now: T + 1500, progressAt: T, from: T + 1400 }), 0);
+}
+
+/* ---------- medidor: trechos de voz = tentativas ---------- */
+{
+  const m = new S.Meter(null);
+  let t = 1000;
+  const burst = (ms, rms) => { for (let i = 0; i < ms; i += 16) { m._sample(rms, 16, t); t += 16; } };
+  burst(300, 0.1);            // "o"
+  check('primeiro trecho de voz = 1 tentativa', m.attempts, 1);
+  check('início do trecho registrado', m.voiceStartAt, 1000);
+  burst(200, 0.01);           // pausa curta (sílaba)
+  burst(300, 0.1);
+  check('pausa de 200 ms não abre tentativa nova', m.attempts, 1);
+  burst(800, 0.01);           // pausa de verdade
+  burst(300, 0.1);            // "o" de novo
+  check('pausa de 800 ms abre a 2ª tentativa', m.attempts, 2);
+  check('primeira tentativa continua sendo a primeira', m.firstAttemptAt, 1000);
+  check('voz acumulada', Math.round(m.voicedMs), 912);
+  m.resetVoiced();
+  check('resultado zera as tentativas', m.attempts, 0);
+  burst(100, 0.1);
+  check('voz que continua depois do resultado não é tentativa nova', m.attempts, 0);
 }
 
 /* ---------- página nova sem reiniciar a sessão: parcial atravessada é descartada ---------- */
@@ -210,7 +289,7 @@ for (const [heard, target] of [['skate', 'de'], ['sol', 'o'], ['volta', 'a'], ['
 }
 
 /* ---------- vigia da sessão (simulado, sem navegador) ---------- */
-function fakeListener({ ageMs, sinceFirstMs, sinceResultMs, voicedMs, quietMs, pending }) {
+function fakeListener({ ageMs, sinceFirstMs, sinceResultMs, voicedMs, quietMs, pending, attempts = 0, firstAttemptMs = 0 }) {
   const l = new S.Listener({});
   const restarts = [];
   l.active = true;
@@ -222,7 +301,7 @@ function fakeListener({ ageMs, sinceFirstMs, sinceResultMs, voicedMs, quietMs, p
   l._lastResult = now - sinceResultMs;
   l._speechAt = 0;
   l.interimResults = pending ? [[['x']]] : [];
-  l.meter = { voicedMs, lastVoiceAt: now - quietMs, level: 0 };
+  l.meter = { voicedMs, lastVoiceAt: now - quietMs, level: 0, attempts, firstAttemptAt: firstAttemptMs ? now - firstAttemptMs : 0 };
   l._check();
   return restarts;
 }
@@ -238,13 +317,51 @@ check('sessão jovem não renova', fakeListener({ ageMs: 30000, sinceFirstMs: 25
 check('fala sem resposta 2s depois de calar reinicia', fakeListener({ ageMs: 20000, sinceFirstMs: 15000, sinceResultMs: 4000, voicedMs: 600, quietMs: 2500, pending: false }).length, 1);
 check('fala respondida (resultado depois da voz) não reinicia', fakeListener({ ageMs: 20000, sinceFirstMs: 15000, sinceResultMs: 1000, voicedMs: 600, quietMs: 2500, pending: false }).length, 0);
 check('ainda dentro dos 2s de silêncio não reinicia', fakeListener({ ageMs: 20000, sinceFirstMs: 15000, sinceResultMs: 3000, voicedMs: 600, quietMs: 1200, pending: false }).length, 0);
-check('ruído curto (<400ms de voz) não reinicia', fakeListener({ ageMs: 20000, sinceFirstMs: 15000, sinceResultMs: 4000, voicedMs: 200, quietMs: 2500, pending: false }).length, 0);
+check('ruído curto (<250ms de voz) não reinicia', fakeListener({ ageMs: 20000, sinceFirstMs: 15000, sinceResultMs: 4000, voicedMs: 200, quietMs: 2500, pending: false }).length, 0);
+check('"a" de 300 ms sem resposta 2 s depois de calar reinicia', fakeListener({ ageMs: 20000, sinceFirstMs: 15000, sinceResultMs: 4000, voicedMs: 300, quietMs: 2500, pending: false }).length, 1);
 // criança repetindo sem parar (episódios "Rex" 22 s e "de" 12 s): voz acumulada, nada chega, nunca há pausa de 2 s
 check('voz acumulada sem resposta reinicia mesmo sem pausa', fakeListener({ ageMs: 40000, sinceFirstMs: 35000, sinceResultMs: 5000, voicedMs: 1600, quietMs: 60, pending: true }).length, 1);
 check('voz acumulada mas resposta recente não reinicia', fakeListener({ ageMs: 40000, sinceFirstMs: 35000, sinceResultMs: 2000, voicedMs: 1600, quietMs: 60, pending: true }).length, 0);
+// criança repetiu a palavra (2 trechos de voz) e nada chegou 2,5 s depois do primeiro: reinicia já, sem pausa
+check('repetiu 2x sem resposta há 3 s reinicia', fakeListener({ ageMs: 20000, sinceFirstMs: 15000, sinceResultMs: 3200, voicedMs: 700, quietMs: 50, pending: true, attempts: 2, firstAttemptMs: 3000 }).length, 1);
+check('repetiu 2x mas só há 2 s não reinicia', fakeListener({ ageMs: 20000, sinceFirstMs: 15000, sinceResultMs: 2500, voicedMs: 700, quietMs: 50, pending: true, attempts: 2, firstAttemptMs: 2000 }).length, 0);
+check('uma tentativa só, há 3 s, ainda espera', fakeListener({ ageMs: 20000, sinceFirstMs: 15000, sinceResultMs: 3200, voicedMs: 700, quietMs: 50, pending: true, attempts: 1, firstAttemptMs: 3000 }).length, 0);
+check('duas tentativas mas voz curta demais (ruído) não reinicia', fakeListener({ ageMs: 20000, sinceFirstMs: 15000, sinceResultMs: 3200, voicedMs: 150, quietMs: 50, pending: true, attempts: 2, firstAttemptMs: 3000 }).length, 0);
+check('"a" repetido (2 x 150 ms) sem resposta reinicia', fakeListener({ ageMs: 20000, sinceFirstMs: 15000, sinceResultMs: 3200, voicedMs: 300, quietMs: 50, pending: true, attempts: 2, firstAttemptMs: 3000 }).length, 1);
 // sessão nova que nunca respondeu: paciência menor (1,2 s de pausa)
 check('sessão nova: fala sem resposta 1,3 s depois de calar reinicia', fakeListener({ ageMs: 4000, sinceFirstMs: null, sinceResultMs: 4000, voicedMs: 800, quietMs: 1300, pending: false }).length, 1);
 check('sessão já respondida: 1,3 s de pausa ainda não reinicia', fakeListener({ ageMs: 20000, sinceFirstMs: 15000, sinceResultMs: 4000, voicedMs: 800, quietMs: 1300, pending: false }).length, 0);
+
+/* ---------- troca de página: sessão velha é renovada na hora ---------- */
+function pageTurn({ sinceFirstMs, ageMs }) {
+  const l = new S.Listener({});
+  const restarts = [];
+  l.active = true;
+  l.rec = { abort() {} };
+  l.restart = (reason) => restarts.push(reason);
+  const now = Date.now();
+  l._startedAt = now - ageMs;
+  l._firstResultAt = sinceFirstMs == null ? 0 : now - sinceFirstMs;
+  l.reset();
+  return restarts.length;
+}
+check('página nova com sessão de 35 s desde o 1º resultado renova', pageTurn({ sinceFirstMs: 35000, ageMs: 40000 }), 1);
+check('página nova com sessão de 24 s mantém', pageTurn({ sinceFirstMs: 24000, ageMs: 30000 }), 0);
+check('página nova com sessão muda de 55 s (aquecimento longo) renova', pageTurn({ sinceFirstMs: null, ageMs: 55000 }), 1);
+check('página nova com sessão muda de 10 s mantém', pageTurn({ sinceFirstMs: null, ageMs: 10000 }), 0);
+
+/* ---------- palavra de 1 letra aceita pela fala curta ---------- */
+{
+  const T = 200000, from = T + 250;
+  const b = (o) => S.shortBurst(Object.assign({ voiceOn: false, from }, o));
+  check('"a" de 130 ms, calou há 1,4 s: aceita', b({ voiceStartAt: T + 1000, lastVoiceAt: T + 1130, now: T + 2600 }), true);
+  check('ainda falando: espera', b({ voiceOn: true, voiceStartAt: T + 1000, lastVoiceAt: T + 1130, now: T + 2600 }), false);
+  check('calou há menos de 600 ms: espera', b({ voiceStartAt: T + 1000, lastVoiceAt: T + 1300, now: T + 1800 }), false);
+  check('menos de 1,5 s desde o início: espera o reconhecedor', b({ voiceStartAt: T + 1000, lastVoiceAt: T + 1130, now: T + 2400 }), false);
+  check('rabo da palavra anterior (antes da troca) não conta', b({ voiceStartAt: T - 300, lastVoiceAt: T + 100, now: T + 2000 }), false);
+  check('fala longa (1,2 s) não é a vogal: não aceita', b({ voiceStartAt: T + 1000, lastVoiceAt: T + 2200, now: T + 3000 }), false);
+  check('estalo de 20 ms não conta', b({ voiceStartAt: T + 1000, lastVoiceAt: T + 1020, now: T + 2600 }), false);
+}
 
 console.log(`\n${total - fails}/${total} verificações ok`);
 process.exit(fails ? 1 : 0);
