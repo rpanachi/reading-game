@@ -172,6 +172,43 @@ check('parcial "um pouco de água" chega em "estou" (2)', t.progress, 7);
 t.update([[say('você')], [say('me')], [say('um pouco de água'), say('com um pouco de água')]], []);
 check('alternativa "com ..." não pula "Estou" (2)', t.progress, 7);
 
+/* ---------- artefatos do reconhecedor em palavras curtas (diagnóstico de 2026-09-14) ---------- */
+for (const [heard, target] of [['do', 'o'], ['no', 'o'], ['vem', 'em'], ['hem', 'em'], ['bum', 'um'], ['da', 'a'], ['do', 'no'], ['da', 'na']])
+  check(`"${heard}" vale por "${target}"`, S.similar(S.normalize(heard), target), true);
+for (const [heard, target] of [['skate', 'de'], ['sol', 'o'], ['volta', 'a'], ['parque', 'e'], ['um', 'o'], ['o', 'e']])
+  check(`"${heard}" NÃO vale por "${target}"`, S.similar(S.normalize(heard), target), false);
+// "um um" vem como o número 11
+{
+  const got = [];
+  const l2 = new S.Listener({ onWords: (f, i) => got.push(i.length ? i[0][0] : f[f.length - 1][0]) });
+  l2._onResult(ev([['11', false]]));
+  check('"11" vira "um um"', got[0].join(' '), 'um um');
+  l2._onResult(ev([['era 111 vez', false]]));
+  check('"111" vira "um um um"', got[1].join(' '), 'era um um um vez');
+  // "11" repetido casa só a palavra esperada, sem pular
+  t = new S.Tracker(targetsOf('Era uma vez um menino chamado Leo.'));
+  t.update([[say('era uma vez')]], []);
+  t.update([[say('era uma vez')]], [[['um', 'um']]]);
+  check('"um um" (do 11) avança só "um"', t.progress, 4);
+}
+
+/* ---------- página nova sem reiniciar a sessão: parcial atravessada é descartada ---------- */
+{
+  const seen = [];
+  const l3 = new S.Listener({ onWords: (f, i) => seen.push({ f: f.map((a) => a[0].join(' ')), i: i.map((a) => a[0].join(' ')) }) });
+  l3.active = true; l3.rec = {};
+  l3._onResult(ev([['de skate', true], ['muito bem', false]]));        // fim da página 1, parcial "muito bem" viva
+  l3.reset();                                                          // página 2
+  l3._onResult(ev([['de skate', true], ['muito bem um dia', false]])); // a fala nova foi emendada na mesma parcial
+  const last = seen[seen.length - 1];
+  check('final antigo ignorado na página nova', last.f.length, 0);
+  check('parcial atravessada: só as palavras novas contam', last.i[0], 'um dia');
+  l3._onResult(ev([['de skate', true], ['muito bem um dia', true], ['rex', false]]));
+  const last2 = seen[seen.length - 1];
+  check('final da parcial atravessada entra sem as palavras antigas', last2.f[0], 'um dia');
+  check('resultado novo entra inteiro', last2.i[0], 'rex');
+}
+
 /* ---------- vigia da sessão (simulado, sem navegador) ---------- */
 function fakeListener({ ageMs, sinceFirstMs, sinceResultMs, voicedMs, quietMs, pending }) {
   const l = new S.Listener({});
@@ -183,6 +220,7 @@ function fakeListener({ ageMs, sinceFirstMs, sinceResultMs, voicedMs, quietMs, p
   l._startedAt = now - ageMs;
   l._firstResultAt = sinceFirstMs == null ? 0 : now - sinceFirstMs;
   l._lastResult = now - sinceResultMs;
+  l._speechAt = 0;
   l.interimResults = pending ? [[['x']]] : [];
   l.meter = { voicedMs, lastVoiceAt: now - quietMs, level: 0 };
   l._check();
@@ -201,6 +239,12 @@ check('fala sem resposta 2s depois de calar reinicia', fakeListener({ ageMs: 200
 check('fala respondida (resultado depois da voz) não reinicia', fakeListener({ ageMs: 20000, sinceFirstMs: 15000, sinceResultMs: 1000, voicedMs: 600, quietMs: 2500, pending: false }).length, 0);
 check('ainda dentro dos 2s de silêncio não reinicia', fakeListener({ ageMs: 20000, sinceFirstMs: 15000, sinceResultMs: 3000, voicedMs: 600, quietMs: 1200, pending: false }).length, 0);
 check('ruído curto (<400ms de voz) não reinicia', fakeListener({ ageMs: 20000, sinceFirstMs: 15000, sinceResultMs: 4000, voicedMs: 200, quietMs: 2500, pending: false }).length, 0);
+// criança repetindo sem parar (episódios "Rex" 22 s e "de" 12 s): voz acumulada, nada chega, nunca há pausa de 2 s
+check('voz acumulada sem resposta reinicia mesmo sem pausa', fakeListener({ ageMs: 40000, sinceFirstMs: 35000, sinceResultMs: 5000, voicedMs: 1600, quietMs: 60, pending: true }).length, 1);
+check('voz acumulada mas resposta recente não reinicia', fakeListener({ ageMs: 40000, sinceFirstMs: 35000, sinceResultMs: 2000, voicedMs: 1600, quietMs: 60, pending: true }).length, 0);
+// sessão nova que nunca respondeu: paciência menor (1,2 s de pausa)
+check('sessão nova: fala sem resposta 1,3 s depois de calar reinicia', fakeListener({ ageMs: 4000, sinceFirstMs: null, sinceResultMs: 4000, voicedMs: 800, quietMs: 1300, pending: false }).length, 1);
+check('sessão já respondida: 1,3 s de pausa ainda não reinicia', fakeListener({ ageMs: 20000, sinceFirstMs: 15000, sinceResultMs: 4000, voicedMs: 800, quietMs: 1300, pending: false }).length, 0);
 
 console.log(`\n${total - fails}/${total} verificações ok`);
 process.exit(fails ? 1 : 0);

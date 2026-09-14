@@ -88,9 +88,17 @@ window.SPEECH = (function () {
    * ("de" → "D"), então uma letra igual à inicial de uma palavra de até
    * 2 letras também vale. Devolve o motivo (string) ou '' se não casa.
    */
+  // Palavra curta dita sozinha: o reconhecedor costuma colar uma consoante na
+  // frente ("o" → "do", "em" → "vem", "um" → "bum") ou trocar a inicial
+  // nasal ("no" → "do"). Para alvos de até 2 letras aceitamos a fala curta
+  // que TERMINA com o alvo, mais estas trocas conhecidas.
+  const SHORT_SWAP = { no: 'do', na: 'da', ne: 'de', nu: 'du' };
+
   function why(a, b) {
     if (a === b) return 'igual';
     if (NUM_EQUIV[a] === b) return 'número';
+    if (b.length <= 2 && a.length <= 4 && a.length > b.length && a.endsWith(b)) return 'sufixo';
+    if (SHORT_SWAP[b] === a) return 'troca n/d';
     const pa = key(a), pb = key(b);
     if (pa && pa === pb) return `fonética ${pa}`;
     const L = Math.max(pa.length, pb.length);
@@ -328,8 +336,11 @@ window.SPEECH = (function () {
 
     _spawn() {
       if (!this.active) return;
+      clearTimeout(this._restartTimer); this._restartTimer = null;
+      if (this.rec) return;   // já existe uma sessão viva (ou abortando): não duplica
       const rec = new SR();
       const id = ++this.session;
+      this._strip = null;
       const age = () => `${Date.now() - this._startedAt}ms`;
       rec.lang = 'pt-BR';
       // Sessão contínua e única. O modo "um enunciado por sessão" (v6) perdia
@@ -357,6 +368,7 @@ window.SPEECH = (function () {
       rec.onaudioend = () => detail('sessão', `#${id} onaudioend ${age()}`);
       rec.onnomatch = () => detail('sessão', `#${id} onnomatch ${age()}`);
       rec.onresult = (e) => {
+        if (this.rec !== rec) return;   // sessão antiga
         const now = Date.now();
         detail('sessão', `#${id} onresult ${age()} (${now - this._lastResult}ms desde o último) resultIndex=${e.resultIndex} results=${e.results.length}`);
         this._lastResult = now;
@@ -368,12 +380,14 @@ window.SPEECH = (function () {
       rec.onerror = (e) => {
         const err = e.error;
         log('sessão', `#${id} onerror "${err}" ${age()}`, e.message || '');
+        if (this.rec !== rec) return;   // sessão antiga, já substituída
         if (err === 'not-allowed' || err === 'service-not-allowed') { this.active = false; this.h.onError && this.h.onError('not-allowed'); }
         else if (err === 'audio-capture') { this.active = false; this.h.onError && this.h.onError('no-mic'); }
         else if (err === 'network') { this.active = false; this.h.onError && this.h.onError('network'); }
         // 'no-speech' e 'aborted' são normais: o onend reinicia a escuta.
       };
       rec.onend = () => {
+        if (this.rec !== rec) { log('sessão', `#${id} onend (sessão antiga, ignorado)`); return; }
         const hadInterim = this.interimResults.length > 0;
         log('sessão', `#${id} onend ${age()} parcialPendente=${hadInterim} active=${this.active}`);
         this.rec = null;
@@ -413,11 +427,17 @@ window.SPEECH = (function () {
       }
       if (!this.rec) { if (now - this._startedAt > 3000) { log('vigia', 'sem sessão há mais de 3s, recriando'); this._spawn(); } return; }
       const quiet = quietFor > 800;
+      const fresh = !this._firstResultAt;   // sessão que ainda não respondeu nada
       // Uma tentativa de fala (voz captada depois do último resultado) tem que
       // ser respondida: se 2 s depois de a criança calar nada chegou, o
       // reconhecedor travou nesse enunciado; reinicia já, antes que ela repita.
-      if (this.waiting() && quietFor > 2000) { this.restart(`fala de ${Math.round(voiced)}ms sem resposta ${(quietFor / 1000).toFixed(1)}s depois de terminar`); return; }
-      if (this._speechAt && now - this._speechAt > 8000 && quiet) { this.restart('fala sem resposta há 8s'); return; }
+      // Numa sessão que nunca respondeu a paciência é menor (1,2 s).
+      if (this.waiting() && quietFor > (fresh ? 1200 : 2000)) { this.restart(`fala de ${Math.round(voiced)}ms sem resposta ${(quietFor / 1000).toFixed(1)}s depois de terminar${fresh ? ' (sessão nova)' : ''}`); return; }
+      // Criança repetindo sem parar (voz acumulada) e nada chega há 4 s: o
+      // reconhecedor emudeceu; reinicia mesmo sem pausa, ela já está repetindo.
+      if (voiced > 1200 && silentFor > 4000) { this.restart(`${Math.round(voiced)}ms de voz sem nenhuma resposta há ${(silentFor / 1000).toFixed(1)}s`); return; }
+      // O próprio reconhecedor avisou fala e não respondeu: 3 s numa sessão nova, 8 s nas outras.
+      if (this._speechAt && now - this._speechAt > (fresh ? 3000 : 8000) && quiet) { this.restart(`fala detectada sem resposta há ${Math.round((now - this._speechAt) / 1000)}s${fresh ? ' (sessão nova)' : ''}`); return; }
       if (age > 45000 && quiet && silentFor > 1200 && (!pending || age > 55000)) this.restart(`renovação preventiva (${Math.round(age / 1000)}s desde o 1º resultado${pending ? ', parcial pendente' : ''})`);
     }
 
@@ -465,7 +485,9 @@ window.SPEECH = (function () {
         const desc = [];
         for (let a = 0; a < r.length; a++) {
           const raw = r[a].transcript;
-          const words = raw.split(/\s+/).map(normalize).filter(Boolean);
+          // "um um" costuma voltar como o número "11": cada "1" vira um "um".
+          let words = raw.replace(/\b1{2,}\b/g, (m) => m.split('').join(' ')).split(/\s+/).map(normalize).filter(Boolean);
+          if (this._strip && i === this._strip.index) words = words.slice(this._strip.words);   // parcial que atravessou a troca de página
           desc.push(`"${raw.trim()}"(${typeof r[a].confidence === 'number' ? r[a].confidence.toFixed(2) : '?'})`);
           if (words.length) alts.push(words);
         }
@@ -488,16 +510,23 @@ window.SPEECH = (function () {
      * viva, porque as primeiras palavras da página nova poderiam ser
      * emendadas nela pelo reconhecedor.
      */
+    /**
+     * Nova página. A sessão NÃO é reiniciada: uma sessão nova leva de 1,6 a
+     * 6 s para dar a primeira resposta (medido), e isso se pagava a cada
+     * página. Os resultados antigos são ignorados; se há uma parcial viva, as
+     * palavras que ela já tinha são descartadas e só o que vier depois conta
+     * para a página nova (o reconhecedor emenda a fala nova na mesma parcial).
+     */
     reset() {
       const pending = this.interimResults.length > 0;
       const age = this.rec ? Date.now() - this._startedAt : 0;
-      const renew = pending || age > 30000;   // sessão velha: renova agora, que a criança está olhando a página nova
-      log('ouvinte', `reset (nova página) finais=${this.finalResults.length} parciais=${this.interimResults.length} idade=${age}ms sessão=${renew ? 'reiniciada' : 'mantida'}`);
+      const lastWords = pending ? (this.interimResults[this.interimResults.length - 1][0] || []).length : 0;
+      this._ignoreBefore = pending ? this._seen - 1 : this._seen;
+      this._strip = pending ? { index: this._seen - 1, words: lastWords } : null;
+      this._nextFinal = Math.max(this._nextFinal, this._ignoreBefore);
       this.finalResults = [];
       this.interimResults = [];
-      this._ignoreBefore = this._seen;
-      this._nextFinal = Math.max(this._nextFinal, this._seen);
-      if (this.active && renew) this.restart(pending ? 'nova página com parcial pendente' : `nova página, sessão com ${Math.round(age / 1000)}s`);
+      log('ouvinte', `reset (nova página) idade=${age}ms sessão=mantida${pending ? ` parcial viva: descarta ${lastWords} palavra(s) já ouvidas` : ''}`);
     }
 
     stop() {

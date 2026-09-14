@@ -76,9 +76,9 @@ paredão de linhas:
 | resumo | início da história, troca de página, ciclo de vida e reinícios da sessão, avanços da leitura, dicas, pulos, erros | sempre |
 | minucioso | cada resultado com suas alternativas e confiança, a decisão do casamento palavra a palavra, o estado do acompanhamento, batimentos | fica num anel dos 80 últimos eventos; só vai para o log quando a leitura trava |
 
-A leitura é considerada **travada** quando a palavra destacada não avança há
-mais de 3 s e o microfone captou fala nesse tempo (ou seja, a criança falou e
-nada aconteceu). Nesse instante o log ganha uma linha `TRAVOU` com a
+A leitura é considerada **travada** quando 3 s depois da primeira voz captada
+para a palavra destacada nada avançou (o relógio conta da primeira tentativa,
+não da troca de palavra, para uma pausa antes de ler não virar alarme falso). Nesse instante o log ganha uma linha `TRAVOU` com a
 fotografia completa do estado (página, palavra atual, ponteiros do
 acompanhamento, idade da sessão, tempo sem resposta, nível do microfone),
 despeja o anel como contexto do que veio antes e passa a registrar tudo até a
@@ -118,7 +118,13 @@ cenários que já travaram.
    reconhecedor numa sessão nova leva 1 a 2 s, então palavras curtas ditas
    sozinhas morriam sem resultado (30 de 97 sessões num teste real). "Uma
    palavra por vez" é garantido pelo acompanhamento (item 4), não pela
-   sessão. O microfone liga sozinho ao abrir a história.
+   sessão. A escuta liga assim que a criança clica na primeira opção da
+   tela de compor (a primeira sessão da página leva 2 s só para abrir o
+   microfone e às vezes nem responde; assim ela já está aquecida quando a
+   leitura começa) e a sessão **não é reiniciada ao virar a página**: uma
+   sessão nova leva de 1,6 a 6 s para dar a primeira resposta, então só os
+   resultados antigos são descartados e, se uma parcial estava viva, as
+   palavras que ela já tinha são ignoradas.
 3. Cada palavra vira uma **chave fonética do português brasileiro**
    (`phon` em `js/speech.js`): "gato"/"gatu", "chamado"/"xamadu",
    "vez"/"ves", "sol"/"sou", "bem"/"ben", "falar"/"fala" viram a mesma
@@ -133,23 +139,27 @@ cenários que já travaram.
    pulada para a leitura não travar em "o", "e", "de", mas só com casamento
    exato; as regras tolerantes (fonética, "1" = um/uma, letra inicial) valem
    para a palavra esperada e para a destacada na tela. Uma palavra repetida
-   ("uma uma") só pode casar com a próxima esperada. Palavras de até duas
-   letras ditas sozinhas costumam voltar como uma letra ("de" → "D"); isso
-   também vale.
-5. Se uma tentativa inteira não avança nada, aparece a dica "Tente de novo:
-   palavra" com um botão para ouvir a pronúncia. Na segunda tentativa sem
-   sucesso a palavra é marcada em amarelo (pulada) e a leitura segue, para a
-   criança nunca ficar presa.
-6. Um vigia (2x por segundo) protege a sessão, sempre com o microfone em
-   silêncio (medidor ao lado do botão 🎤) para não cortar uma palavra:
-   toda fala captada tem que ser respondida, e se 2 s depois de a criança
-   calar nenhum resultado chegou, o reconhecedor travou nesse enunciado e
-   a sessão é reiniciada na hora (enquanto a resposta não chega o status
-   mostra "Entendendo..."); renova a sessão a partir de 45 s depois do
-   primeiro resultado numa pausa, porque o Chrome para de responder por
-   volta de 60 s sem avisar; e renova ao virar a página se a sessão já tem
-   mais de 30 s ou uma parcial pendente. O reinício é imediato; só a
-   primeira resposta da sessão nova demora 1 a 2 s.
+   ("uma uma") só pode casar com a próxima esperada. Palavras curtas ditas
+   sozinhas voltam do reconhecedor com artefatos conhecidos, todos aceitos:
+   uma letra só ("de" → "D"), uma consoante colada na frente ("o" → "do",
+   "em" → "vem", "um" → "bum"), a troca n/d ("no" → "do") e "um um" virando
+   o número "11" (cada "1" vira um "um").
+5. Se 3 s depois da primeira tentativa (primeira voz captada desde que a
+   palavra ficou destacada) nada avançou, ou se uma tentativa inteira foi
+   finalizada sem avançar, aparece a dica com um botão para ouvir a
+   pronúncia. Para palavras de até 3 letras a dica é "Leia as duas juntas:
+   um cachorro": o reconhecedor entende mal uma palavra curta sozinha e
+   acerta quando ela vem com a seguinte. Na segunda tentativa finalizada
+   sem sucesso a palavra é marcada em amarelo (pulada) e a leitura segue.
+6. Um vigia (2x por segundo) protege a sessão. Toda fala captada tem que
+   ser respondida: se 2 s depois de a criança calar nenhum resultado chegou
+   (1,2 s numa sessão que ainda não respondeu nada), o reconhecedor travou
+   nesse enunciado e a sessão é reiniciada. Se a criança fica repetindo sem
+   pausa e mesmo assim nada chega em 4 s (voz acumulada acima de 1,2 s), a
+   sessão é reiniciada sem esperar silêncio, porque ela já está repetindo.
+   A sessão também é renovada a partir de 45 s depois do primeiro resultado,
+   numa pausa, porque o Chrome para de responder por volta de 60 s sem
+   avisar. Enquanto uma resposta não chega o status mostra "Entendendo...".
 7. As palavras lidas ficam verdes, a próxima fica laranja. Quando a página
    termina, toca um sino, cai confete e o botão "Próxima página" é liberado.
 

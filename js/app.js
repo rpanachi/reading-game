@@ -6,7 +6,7 @@
   const $$ = (s) => Array.from(document.querySelectorAll(s));
   const D = window.GAME_DATA;
   const VOICES = { francisca: { label: 'feminina', gender: 'f' }, antonio: { label: 'masculina', gender: 'm' } };
-  const APP_VERSION = '13'; // aparece no rodapé da página de leitura; suba junto com o ?v= do index.html
+  const APP_VERSION = '14'; // aparece no rodapé da página de leitura; suba junto com o ?v= do index.html
   const log = (tag, msg, data) => DIAG.log(tag, msg, data);
   const detail = (tag, msg, data) => DIAG.detail(tag, msg, data);
   const STUCK_MS = 3000;   // palavra sem avanço, com a criança falando: liga o diagnóstico minucioso
@@ -17,7 +17,8 @@
     listening: false, micDenied: false,
     startedAt: 0, wordsRead: 0,
     voice: 'francisca', tracker: null, missFinals: 0, speaking: false, waiting: false,
-    progressAt: 0,   // quando a palavra atual passou a ser a atual (detecta travamento)
+    progressAt: 0,   // quando a palavra atual passou a ser a atual
+    firstVoiceAt: 0, // primeira voz captada desde então (o travamento conta a partir daqui)
   };
   try { const v = localStorage.getItem('voz'); if (v && VOICES[v]) state.voice = v; } catch (_) { /* sem storage */ }
 
@@ -94,7 +95,26 @@
     $('#hero-art').innerHTML = ART.thumb('character', 'menina') + ART.thumb('character', 'gato') + ART.thumb('character', 'galinha');
   }
 
+  // A primeira sessão de reconhecimento da página é lenta (1,7 a 2,5 s só para
+  // abrir o microfone) e às vezes nem responde. Ligamos a escuta assim que a
+  // criança começa a montar a história, para a sessão já estar pronta e
+  // aquecida quando a leitura começar.
+  let warmed = false;
+  function warmUp() {
+    if (warmed || !SPEECH.supported) return;
+    warmed = true;
+    log('app', 'aquecendo o reconhecimento na tela de compor');
+    listener.start();
+    setMicReady('🎤 preparando o microfone…');
+  }
+  function setMicReady(text) {
+    const el = $('#mic-ready');
+    el.textContent = text;
+    el.hidden = !text;
+  }
+
   function select(key, id) {
+    warmUp();
     state.sel[key] = id;
     $$(`.card[data-key="${key}"]`).forEach((c) => {
       const on = c.dataset.id === id;
@@ -148,6 +168,7 @@
     onState(s) {
       state.listening = s === 'listening';
       if (state.listening) meter.start();   // microfone já liberado: liga o medidor visual
+      if (warmed && !state.story && state.listening) setMicReady('🎤 microfone pronto');   // no erro, o aviso do onError fica
       updateMicUI();
       setStatus();
     },
@@ -157,6 +178,7 @@
       updateMicUI();
       if (kind === 'not-allowed') state.micDenied = true;
       showNotice(kind);
+      if (!state.story) setMicReady(kind === 'not-allowed' ? '🎤 microfone bloqueado: libere o acesso no navegador' : '🎤 microfone indisponível');
       setStatus();
     },
   });
@@ -167,6 +189,7 @@
     const n = Math.min(vuBars.length, Math.round(level * 25));
     vuBars.forEach((b, i) => b.classList.toggle('on', i < n));
     $('#vu').classList.toggle('voice', voice);
+    if (voice && state.story && !state.firstVoiceAt) state.firstVoiceAt = Date.now();
   });
   listener.meter = meter;
 
@@ -198,13 +221,14 @@
    * log minucioso (com o contexto dos eventos anteriores) até destravar.
    */
   function checkStuck() {
-    if (!DIAG.enabled) return;
     if (!state.story || state.speaking || !state.listening) return;
     if (state.progress >= state.targets.length) return;
-    const since = Date.now() - state.progressAt;
-    const falou = meter.lastVoiceAt > state.progressAt;
-    if (!DIAG.stuck() && since > STUCK_MS && falou) {
-      DIAG.beginStuck(`palavra #${state.progress} "${currentWord()}" sem avançar há ${(since / 1000).toFixed(1)}s (houve fala)`, snapshot());
+    if (!state.firstVoiceAt) return;                 // a criança ainda não tentou ler esta palavra
+    const since = Date.now() - state.firstVoiceAt;   // conta da primeira tentativa, não da troca de palavra
+    if (since <= STUCK_MS) return;
+    if ($('#hint').hidden) showHint();               // orienta: palavra curta lida junto com a seguinte
+    if (DIAG.enabled && !DIAG.stuck()) {
+      DIAG.beginStuck(`palavra #${state.progress} "${currentWord()}" sem avançar ${(since / 1000).toFixed(1)}s depois da primeira tentativa`, snapshot());
     }
   }
 
@@ -254,12 +278,27 @@
     const tok = state.tokens.find((t) => t.wordIndex === state.progress);
     return tok ? tok.text.replace(/[^\p{L}\p{N}'-]/gu, '') : '';
   }
+  /**
+   * Palavras da dica. Palavra curtinha ("um", "o", "de", "em") dita sozinha o
+   * reconhecedor entende mal (vira "11", "do", "vem"); lida junto com a
+   * seguinte ("um cachorro") ele acerta. Então a dica sugere as duas.
+   */
+  function hintWords() {
+    const clean = (t) => t.text.replace(/[^\p{L}\p{N}'-]/gu, '');
+    const cur = state.tokens.find((t) => t.wordIndex === state.progress);
+    if (!cur) return [];
+    const next = state.tokens.find((t) => t.wordIndex === state.progress + 1);
+    const w = clean(cur);
+    return w.length <= 3 && next ? [w, clean(next)] : [w];
+  }
   function showHint() {
-    const w = currentWord();
-    if (!w) return;
-    log('app', `dica: tente de novo "${w}"`);
+    const words = hintWords();
+    if (!words.length) return;
+    log('app', `dica: ${words.length > 1 ? 'leia junto' : 'tente de novo'} "${words.join(' ')}"`);
     const h = $('#hint');
-    h.innerHTML = `Tente de novo: <b>${w}</b> <span class="hint-ear">🔊 ouvir a palavra</span>`;
+    h.innerHTML = words.length > 1
+      ? `Leia as duas juntas: <b>${words.join(' ')}</b> <span class="hint-ear">🔊 ouvir</span>`
+      : `Tente de novo: <b>${words[0]}</b> <span class="hint-ear">🔊 ouvir a palavra</span>`;
     h.hidden = false;
     const span = $(`#reading-text .w[data-wi="${state.progress}"]`);
     if (span) { span.classList.remove('shake'); void span.offsetWidth; span.classList.add('shake'); }
@@ -321,6 +360,7 @@
     state.index = i;
     state.progress = 0;
     state.progressAt = Date.now();
+    state.firstVoiceAt = 0;
     state.missFinals = 0;
     state.tokens = SPEECH.tokenize(slide.text);
     state.targets = state.tokens.filter((t) => t.wordIndex !== null).map((t) => t.norm);
@@ -385,6 +425,7 @@
     log('app', `progresso ${state.progress}→${clamped}/${total} (${source}) próxima="${state.targets[clamped] || '-'}"`);
     if (DIAG.stuck()) DIAG.endStuck(`avançou ${state.progress}→${clamped} por ${source} depois de ${((Date.now() - state.progressAt) / 1000).toFixed(1)}s`, { ouvi: listener.lastText });
     state.progressAt = Date.now();
+    state.firstVoiceAt = 0;
     state.progress = clamped;
     // Só um pulo manual move o ponto de partida do Tracker. Fazer isso a cada
     // avanço por voz empurrava o ponteiro para depois de palavras que ainda
@@ -447,11 +488,10 @@
   }
 
   function backToCompose() {
-    listener.stop();
-    meter.stop();
     SPEECH.stopSpeaking();
     state.story = null;
     showScreen('compose');
+    if (listener.active) setMicReady('🎤 microfone pronto');
   }
 
   async function copyDiagnostics() {
@@ -472,7 +512,7 @@
   $('#btn-mic').addEventListener('click', toggleMic);
   $('#btn-listen').addEventListener('click', () => speakText(state.story.slides[state.index].text));
   $('#btn-diag').addEventListener('click', copyDiagnostics);
-  $('#hint').addEventListener('click', () => speakText(currentWord()));
+  $('#hint').addEventListener('click', () => speakText(hintWords().join(' ')));
   $('#voice').value = state.voice;
   $('#voice').addEventListener('change', (e) => {
     state.voice = e.target.value;
