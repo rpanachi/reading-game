@@ -180,6 +180,9 @@ for (const [heard, target] of [['skate', 'de'], ['sol', 'o'], ['volta', 'a'], ['
 // vogal sozinha trocada por outra vogal ("e" → "o", diagnóstico de 2026-09-14, episódio 19)
 for (const [heard, target] of [['o', 'e'], ['a', 'o'], ['é', 'a']])
   check(`vogal solta: "${heard}" vale por "${target}"`, S.similar(S.normalize(heard), target), true);
+for (const [heard, target] of [['ela', 'era'], ['blincar', 'brincar'], ['calo', 'carro']])
+  check(`troca r/l: "${heard}" vale por "${target}"`, S.similar(S.normalize(heard), S.normalize(target)), true);
+check('troca r/l não vale com duas diferenças ("lela" ≠ "era")', S.similar('lela', 'era'), false);
 check('vogal solta não vale no meio da frase (só na palavra esperada)', S.matchProgress(targetsOf('o gato e o cão'), say('o gato a o cão'), 0), 5);
 check('vogal solta: "o" não pula "gato" para casar "e"', S.matchProgress(targetsOf('o gato e o cão'), say('o o'), 1, 2, null, 1), 1);
 
@@ -254,9 +257,11 @@ check('vogal solta: "o" não pula "gato" para casar "e"', S.matchProgress(target
   const m = new S.Meter(null);
   let t = 1000;
   const burst = (ms, rms) => { for (let i = 0; i < ms; i += 16) { m._sample(rms, 16, t); t += 16; } };
+  { const m2 = new S.Meter(null); let t2 = 1000; for (let i = 0; i < 32; i += 16) { m2._sample(0.1, 16, t2); t2 += 16; } m2._sample(0.01, 16, t2); check('estalo de 32 ms não é tentativa', m2.attempts, 0); }
   burst(300, 0.1);            // "o"
   check('primeiro trecho de voz = 1 tentativa', m.attempts, 1);
   check('início do trecho registrado', m.voiceStartAt, 1000);
+  check('início da tentativa registrado', m.lastAttemptAt, 1000);
   burst(200, 0.01);           // pausa curta (sílaba)
   burst(300, 0.1);
   check('pausa de 200 ms não abre tentativa nova', m.attempts, 1);
@@ -264,6 +269,7 @@ check('vogal solta: "o" não pula "gato" para casar "e"', S.matchProgress(target
   burst(300, 0.1);            // "o" de novo
   check('pausa de 800 ms abre a 2ª tentativa', m.attempts, 2);
   check('primeira tentativa continua sendo a primeira', m.firstAttemptAt, 1000);
+  check('última tentativa é o 2º trecho', m.lastAttemptAt, 2616);
   check('voz acumulada', Math.round(m.voicedMs), 912);
   m.resetVoiced();
   check('resultado zera as tentativas', m.attempts, 0);
@@ -289,10 +295,11 @@ check('vogal solta: "o" não pula "gato" para casar "e"', S.matchProgress(target
 }
 
 /* ---------- vigia da sessão (simulado, sem navegador) ---------- */
-function fakeListener({ ageMs, sinceFirstMs, sinceResultMs, voicedMs, quietMs, pending, attempts = 0, firstAttemptMs = 0 }) {
+function fakeListener({ ageMs, sinceFirstMs, sinceResultMs, voicedMs, quietMs, pending, attempts = 0, firstAttemptMs = 0, idle = false, attemptMs = null }) {
   const l = new S.Listener({});
   const restarts = [];
   l.active = true;
+  l.idle = idle;
   l.rec = { abort() { restarts.push('abort'); } };
   l.restart = (reason) => restarts.push(reason);
   const now = Date.now();
@@ -301,7 +308,8 @@ function fakeListener({ ageMs, sinceFirstMs, sinceResultMs, voicedMs, quietMs, p
   l._lastResult = now - sinceResultMs;
   l._speechAt = 0;
   l.interimResults = pending ? [[['x']]] : [];
-  l.meter = { voicedMs, lastVoiceAt: now - quietMs, level: 0, attempts, firstAttemptAt: firstAttemptMs ? now - firstAttemptMs : 0 };
+  // a última tentativa começou quando a voz começou (antes da pausa), salvo se dito ao contrário
+  l.meter = { voicedMs, lastVoiceAt: now - quietMs, level: 0, attempts, firstAttemptAt: firstAttemptMs ? now - firstAttemptMs : 0, lastAttemptAt: now - (attemptMs == null ? quietMs + voicedMs : attemptMs), resetVoiced() { this.voicedMs = 0; this.attempts = 0; this.firstAttemptAt = 0; } };
   l._check();
   return restarts;
 }
@@ -328,15 +336,24 @@ check('repetiu 2x mas só há 2 s não reinicia', fakeListener({ ageMs: 20000, s
 check('uma tentativa só, há 3 s, ainda espera', fakeListener({ ageMs: 20000, sinceFirstMs: 15000, sinceResultMs: 3200, voicedMs: 700, quietMs: 50, pending: true, attempts: 1, firstAttemptMs: 3000 }).length, 0);
 check('duas tentativas mas voz curta demais (ruído) não reinicia', fakeListener({ ageMs: 20000, sinceFirstMs: 15000, sinceResultMs: 3200, voicedMs: 150, quietMs: 50, pending: true, attempts: 2, firstAttemptMs: 3000 }).length, 0);
 check('"a" repetido (2 x 150 ms) sem resposta reinicia', fakeListener({ ageMs: 20000, sinceFirstMs: 15000, sinceResultMs: 3200, voicedMs: 300, quietMs: 50, pending: true, attempts: 2, firstAttemptMs: 3000 }).length, 1);
-// sessão nova que nunca respondeu: paciência menor (1,2 s de pausa)
-check('sessão nova: fala sem resposta 1,3 s depois de calar reinicia', fakeListener({ ageMs: 4000, sinceFirstMs: null, sinceResultMs: 4000, voicedMs: 800, quietMs: 1300, pending: false }).length, 1);
+// sessão nova que nunca respondeu: a primeira resposta leva de 1 a 4 s, paciência de 2,5 s de pausa
+check('sessão nova: 1,3 s de pausa ainda não reinicia', fakeListener({ ageMs: 4000, sinceFirstMs: null, sinceResultMs: 4000, voicedMs: 800, quietMs: 1300, pending: false }).length, 0);
+check('sessão nova: 2,6 s de pausa reinicia', fakeListener({ ageMs: 5000, sinceFirstMs: null, sinceResultMs: 5000, voicedMs: 800, quietMs: 2600, pending: false }).length, 1);
 check('sessão já respondida: 1,3 s de pausa ainda não reinicia', fakeListener({ ageMs: 20000, sinceFirstMs: 15000, sinceResultMs: 4000, voicedMs: 800, quietMs: 1300, pending: false }).length, 0);
+// voz que já soava quando a sessão nasceu (sessão trocada no meio da repetição) não é tentativa dela
+check('rabo da fala anterior numa sessão nova não reinicia', fakeListener({ ageMs: 2000, sinceFirstMs: null, sinceResultMs: 2000, voicedMs: 300, quietMs: 2600, pending: false, attemptMs: 3000 }).length, 0);
+check('fala iniciada depois do início da sessão conta', fakeListener({ ageMs: 5000, sinceFirstMs: null, sinceResultMs: 5000, voicedMs: 300, quietMs: 2600, pending: false, attemptMs: 2900 }).length, 1);
+// ocioso (tela de compor, página completa): conversa não reinicia; só a renovação por idade
+check('ocioso: repetição sem resposta não reinicia', fakeListener({ ageMs: 20000, sinceFirstMs: 15000, sinceResultMs: 3200, voicedMs: 700, quietMs: 50, pending: true, attempts: 2, firstAttemptMs: 3000, idle: true }).length, 0);
+check('ocioso: fala sem resposta não reinicia', fakeListener({ ageMs: 20000, sinceFirstMs: 15000, sinceResultMs: 4000, voicedMs: 600, quietMs: 2500, pending: false, idle: true }).length, 0);
+check('ocioso: sessão velha renova numa pausa', fakeListener({ ageMs: 50000, sinceFirstMs: 46000, sinceResultMs: 2000, voicedMs: 0, quietMs: 2000, pending: false, idle: true }).length, 1);
 
 /* ---------- troca de página: sessão velha é renovada na hora ---------- */
 function pageTurn({ sinceFirstMs, ageMs }) {
   const l = new S.Listener({});
   const restarts = [];
   l.active = true;
+  l.idle = false;
   l.rec = { abort() {} };
   l.restart = (reason) => restarts.push(reason);
   const now = Date.now();
@@ -344,6 +361,26 @@ function pageTurn({ sinceFirstMs, ageMs }) {
   l._firstResultAt = sinceFirstMs == null ? 0 : now - sinceFirstMs;
   l.reset();
   return restarts.length;
+}
+{
+  // voz do jogo no meio da página: reset sem renovar, e o Tracker recomeça dos finais novos
+  const l = new S.Listener({});
+  const restarts = [];
+  l.active = true; l.idle = false;
+  l.rec = { abort() {} };
+  l.restart = (reason) => restarts.push(reason);
+  const now = Date.now();
+  l._startedAt = now - 40000; l._firstResultAt = now - 36000;
+  l.reset({ renew: false, why: 'fim da voz do jogo' });
+  check('reset sem renovar mantém a sessão velha', restarts.length, 0);
+  const tg = targetsOf('Era uma vez um gato chamado Tom.');
+  t = new S.Tracker(tg);
+  t.update([[say('era uma')], [say('vez')]], []);
+  check('três palavras lidas antes da voz do jogo', t.progress, 3);
+  t.rebase();
+  const r = t.update([[say('um gato')]], []);
+  check('depois do rebase o primeiro final novo é aplicado', t.progress, 5);
+  check('rebase não conta o final novo como erro', r.miss, false);
 }
 check('página nova com sessão de 35 s desde o 1º resultado renova', pageTurn({ sinceFirstMs: 35000, ageMs: 40000 }), 1);
 check('página nova com sessão de 24 s mantém', pageTurn({ sinceFirstMs: 24000, ageMs: 30000 }), 0);

@@ -105,6 +105,17 @@ window.SPEECH = (function () {
     if (SHORT_SWAP[b] === a) return 'troca n/d';
     const pa = key(a), pb = key(b);
     if (pa && pa === pb) return `fonética ${pa}`;
+    // Criança pequena troca r por l ("era" → "ela", "brincar" → "blincar");
+    // chaves do mesmo tamanho que só diferem numa troca r/l casam.
+    if (pa.length >= 3 && pa.length === pb.length) {
+      let diff = 0, rl = true;
+      for (let i = 0; i < pa.length && rl; i++) {
+        if (pa[i] === pb[i]) continue;
+        diff++;
+        if (!((pa[i] === 'r' && pb[i] === 'l') || (pa[i] === 'l' && pb[i] === 'r'))) rl = false;
+      }
+      if (rl && diff === 1) return 'troca r/l';
+    }
     const L = Math.max(pa.length, pb.length);
     if (L < 4) {
       const [s, t] = a.length <= b.length ? [a, b] : [b, a];
@@ -226,6 +237,13 @@ window.SPEECH = (function () {
       this.progress = Math.max(this.progress, Math.min(p, this.target.length));
       this.committed = Math.max(this.committed, this.progress);
     }
+    /** O ouvinte descartou os resultados (voz do jogo): os próximos finais começam do zero. */
+    rebase() {
+      this.applied = 0;
+      this.liveAdvanced = false;
+      this.lastMiss = null;
+      this.committed = Math.max(this.committed, this.progress);
+    }
     update(finals, interims) {
       const before = this.progress;
       const len = this.target.length;
@@ -281,8 +299,11 @@ window.SPEECH = (function () {
       this.lastVoiceAt = 0; // último instante com voz (Date.now), para renovar só no silêncio
       this.voiceOn = false;
       this.voiceStartAt = 0;   // início do trecho de voz atual (trechos separados por ≥400 ms de pausa)
-      this.attempts = 0;       // trechos de voz iniciados desde o último resultado (= tentativas de fala)
-      this.firstAttemptAt = 0; // início do primeiro desses trechos
+      this.segMs = 0;          // voz acumulada no trecho atual
+      this.segCounted = false; // o trecho atual já contou como tentativa?
+      this.lastAttemptAt = 0;  // início do último trecho que chegou a 100 ms (uma tentativa de fala)
+      this.attempts = 0;       // tentativas desde o último resultado
+      this.firstAttemptAt = 0; // início da primeira dessas tentativas
       this.stream = null;
       this.ctx = null;
       this.raf = 0;
@@ -325,13 +346,21 @@ window.SPEECH = (function () {
       const voice = rms > 0.04;
       if (voice) {
         if (!this.voiceOn && (!this.lastVoiceAt || t - this.lastVoiceAt >= 400)) {
-          // borda de subida depois de uma pausa: trecho de voz novo (uma tentativa)
+          // borda de subida depois de uma pausa: trecho de voz novo
           this.voiceStartAt = t;
-          this.attempts++;
-          if (!this.firstAttemptAt) this.firstAttemptAt = t;
+          this.segMs = 0;
+          this.segCounted = false;
         }
         this.voiceOn = true;
         this.voicedMs += dt; this.lastVoiceAt = t;
+        this.segMs += dt;
+        // Um estalo de 30 ms não é fala: o trecho só vira tentativa aos 100 ms.
+        if (!this.segCounted && this.segMs >= 100) {
+          this.segCounted = true;
+          this.lastAttemptAt = this.voiceStartAt;
+          this.attempts++;
+          if (!this.firstAttemptAt) this.firstAttemptAt = this.voiceStartAt;
+        }
       } else {
         this.voiceOn = false;
       }
@@ -347,6 +376,24 @@ window.SPEECH = (function () {
       this.level = 0; this.voiceOn = false; this.resetVoiced();
       this.onLevel && this.onLevel(0, false);
     }
+  }
+
+  // Peso das palavras da página no reconhecedor local (escala 0 a 10 do Chrome).
+  const PHRASE_BOOST = 3;
+
+  /* ---------- reconhecimento no aparelho (Chrome 139+) ---------- */
+  const localApi = supported && typeof SR.available === 'function' && typeof SR.install === 'function' && 'processLocally' in SR.prototype;
+  /** "available" | "downloadable" | "downloading" | "unavailable" (ou "sem-api"). */
+  function localAvailable() {
+    if (!localApi) return Promise.resolve('sem-api');
+    try { return SR.available({ langs: ['pt-BR'], processLocally: true }).catch((e) => { log('local', 'available() falhou', String(e)); return 'unavailable'; }); }
+    catch (e) { log('local', 'available() lançou', String(e)); return Promise.resolve('unavailable'); }
+  }
+  /** Pede ao Chrome para baixar o pacote pt-BR (chamar num clique do usuário). */
+  function localInstall() {
+    if (!localApi) return Promise.resolve(false);
+    try { return SR.install({ langs: ['pt-BR'], processLocally: true }).catch((e) => { log('local', 'install() falhou', String(e)); return false; }); }
+    catch (e) { log('local', 'install() lançou', String(e)); return Promise.resolve(false); }
   }
 
   /* ---------- ouvinte: um enunciado por vez ---------- */
@@ -370,6 +417,32 @@ window.SPEECH = (function () {
       this._ticks = 0;
       this.restarts = 0;
       this.lastText = '';
+      this.idle = true;         // nada para ler (tela de compor, página completa): o vigia não reinicia por voz
+      this.local = false;       // reconhecimento no próprio aparelho (Chrome 139+), com as palavras da página
+      this.phrases = [];        // palavras da página passadas ao reconhecedor local (contextual biasing)
+    }
+
+    /** Liga/desliga o reconhecimento no aparelho; se a escuta está ligada, troca a sessão. */
+    setLocal(on) {
+      on = !!on;
+      if (on === this.local) return;
+      this.local = on;
+      log('ouvinte', `reconhecimento ${on ? 'no aparelho' : 'na nuvem'}`);
+      if (this.active) this.restart(`troca para reconhecimento ${on ? 'no aparelho' : 'na nuvem'}`);
+    }
+
+    /** Palavras da página, para o reconhecedor local dar preferência a elas. */
+    setPhrases(words) {
+      this.phrases = Array.from(new Set(words.filter(Boolean)));
+      if (this.local && this.rec) this._applyPhrases(this.rec);
+    }
+
+    _applyPhrases(rec) {
+      if (!this.local || this._noPhrases || typeof window.SpeechRecognitionPhrase !== 'function') return;
+      try {
+        rec.phrases = this.phrases.map((w) => new window.SpeechRecognitionPhrase(w, PHRASE_BOOST));
+        detail('ouvinte', `${this.phrases.length} palavras enviadas ao reconhecedor local`);
+      } catch (e) { log('ouvinte', 'não deu para passar as palavras ao reconhecedor local', String(e)); }
     }
 
     start() {
@@ -398,6 +471,12 @@ window.SPEECH = (function () {
       rec.continuous = true;
       rec.interimResults = true;
       rec.maxAlternatives = 5;
+      if (this.local) {
+        // Reconhecimento no próprio aparelho (sem servidor): sem a demora de
+        // abrir uma sessão na nuvem e com as palavras da página como dica.
+        try { rec.processLocally = true; } catch (e) { log('ouvinte', 'processLocally falhou', String(e)); }
+        this._applyPhrases(rec);
+      }
       this._nextFinal = 0;
       this._ignoreBefore = 0;
       this._seen = 0;
@@ -406,7 +485,8 @@ window.SPEECH = (function () {
       this._firstResultAt = 0;
       this._speechAt = 0;
       if (this.meter) this.meter.resetVoiced();
-      rec.onstart = () => { log('sessão', `#${id} onstart (${age()} após start)`); this.h.onState && this.h.onState('listening'); };
+      let started = false;
+      rec.onstart = () => { started = true; this._startFails = 0; log('sessão', `#${id} onstart (${age()} após start)${this.local ? ' no aparelho' : ''}`); if (this.local) this._localFails = 0; this.h.onState && this.h.onState('listening'); };
       rec.onaudiostart = () => detail('sessão', `#${id} onaudiostart ${age()}`);
       rec.onsoundstart = () => detail('sessão', `#${id} onsoundstart ${age()}`);
       rec.onspeechstart = () => { detail('sessão', `#${id} onspeechstart ${age()}`); if (!this._speechAt) this._speechAt = Date.now(); this.h.onActivity && this.h.onActivity(true); };
@@ -431,6 +511,40 @@ window.SPEECH = (function () {
         if (err === 'not-allowed' || err === 'service-not-allowed') { this.active = false; this.h.onError && this.h.onError('not-allowed'); }
         else if (err === 'audio-capture') { this.active = false; this.h.onError && this.h.onError('no-mic'); }
         else if (err === 'network') { this.active = false; this.h.onError && this.h.onError('network'); }
+        else if (err === 'phrases-not-supported' && this.local) {
+          // O reconhecedor do aparelho não aceita as palavras como dica: segue
+          // no aparelho, só sem elas.
+          this._noPhrases = true;
+          log('ouvinte', 'reconhecedor do aparelho não aceita as palavras da página (phrases-not-supported); seguindo sem elas');
+          this._dropAndRespawn(rec, 0);
+        }
+        else if (err === 'language-not-supported' && this.local) {
+          // O reconhecedor do aparelho recusou pt-BR. O Chrome não dispara
+          // onend depois deste erro (medido), então a sessão morta é descartada
+          // aqui. Uma segunda tentativa 1 s depois cobre o pacote que ainda está
+          // terminando de instalar; se falhar de novo, volta para a nuvem.
+          this._localFails = (this._localFails || 0) + 1;
+          if (this._localFails < 2) {
+            log('ouvinte', `reconhecedor do aparelho recusou pt-BR (${e.message || 'language-not-supported'}); tentando de novo em 1 s`);
+            localAvailable().then((st) => log('local', `pacote pt-BR no aparelho agora: ${st}`));
+            this._dropAndRespawn(rec, 1000);
+          } else {
+            this.local = false;
+            this._localFails = 0;
+            log('ouvinte', 'reconhecimento no aparelho indisponível (language-not-supported 2x): voltando para a nuvem');
+            this.h.onLocal && this.h.onLocal(false, e.message || 'language-not-supported');
+            this._dropAndRespawn(rec, 0);
+          }
+        }
+        else if (err !== 'no-speech' && err !== 'aborted' && !started) {
+          // Erro desconhecido antes de a sessão abrir: pode vir sem onend, e a
+          // sessão morta prenderia a escuta. Descarta e tenta de novo (1 s,
+          // dobrando até 10 s enquanto continuar falhando).
+          this._startFails = (this._startFails || 0) + 1;
+          const delay = Math.min(1000 * 2 ** (this._startFails - 1), 10000);
+          log('ouvinte', `sessão #${id} falhou ao abrir (${err}); nova tentativa em ${delay / 1000}s`);
+          this._dropAndRespawn(rec, delay);
+        }
         // 'no-speech' e 'aborted' são normais: o onend reinicia a escuta.
       };
       rec.onend = () => {
@@ -448,6 +562,15 @@ window.SPEECH = (function () {
       this.rec = rec;
       try { rec.start(); log('sessão', `#${id} start() chamado`); }
       catch (e) { log('sessão', `#${id} start() lançou`, String(e)); }
+    }
+
+    /** Descarta uma sessão que morreu sem onend e abre outra depois de `delay` ms. */
+    _dropAndRespawn(rec, delay) {
+      this.rec = null;
+      this.interimResults = [];
+      try { rec.abort(); } catch (_) { /* ignore */ }
+      clearTimeout(this._restartTimer);
+      if (this.active) this._restartTimer = setTimeout(() => this._spawn(), delay);
     }
 
     /**
@@ -479,11 +602,23 @@ window.SPEECH = (function () {
       if (!this.rec) { if (now - this._startedAt > 3000) { log('vigia', 'sem sessão há mais de 3s, recriando'); this._spawn(); } return; }
       const quiet = quietFor > 800;
       const fresh = !this._firstResultAt;   // sessão que ainda não respondeu nada
+      // Nada para ler (tela de compor, página completa): a voz é conversa, não
+      // tentativa; reiniciar por ela só trocava uma sessão boa por uma nova, que
+      // demora 1 a 4 s para responder (e às vezes nem responde). Só a renovação
+      // preventiva por idade continua valendo.
+      if (this.idle) {
+        if (m) m.resetVoiced();   // conversa não acumula como tentativa (disparava na 1ª palavra da página)
+        if (age > 45000 && quiet && silentFor > 1200) this.restart(`renovação preventiva ociosa (${Math.round(age / 1000)}s desde o 1º resultado)`);
+        return;
+      }
       // Uma tentativa de fala (voz captada depois do último resultado) tem que
       // ser respondida: se 2 s depois de a criança calar nada chegou, o
       // reconhecedor travou nesse enunciado; reinicia já, antes que ela repita.
-      // Numa sessão que nunca respondeu a paciência é menor (1,2 s).
-      if (this.waiting() && quietFor > (fresh ? 1200 : 2000)) { this.restart(`fala de ${Math.round(voiced)}ms sem resposta ${(quietFor / 1000).toFixed(1)}s depois de terminar${fresh ? ' (sessão nova)' : ''}`); return; }
+      // Numa sessão nova a primeira resposta leva de 1 a 4 s (medido), então a
+      // paciência é maior (2,5 s): matar cedo trocava uma sessão viva e lenta
+      // por outra nova, igualmente lenta, e a leitura ficava presa na primeira
+      // palavra por 20 s.
+      if (this.waiting() && quietFor > (fresh ? 2500 : 2000)) { this.restart(`fala de ${Math.round(voiced)}ms sem resposta ${(quietFor / 1000).toFixed(1)}s depois de terminar${fresh ? ' (sessão nova)' : ''}`); return; }
       // A criança já repetiu (2+ trechos de voz desde o último resultado) e nada
       // chegou 2,5 s depois do primeiro: o reconhecedor não está ouvindo (medido:
       // ele fica mudo de 4 a 15 s com uma parcial aberta enquanto ela repete uma
@@ -504,6 +639,8 @@ window.SPEECH = (function () {
       const m = this.meter;
       return {
         sessao: this.session,
+        modo: this.local ? 'aparelho' : 'nuvem',
+        ocioso: this.idle,
         idadeMs: this.rec ? now - this._startedAt : null,
         desde1oResultadoMs: this._firstResultAt ? now - this._firstResultAt : null,
         semResultadoMs: this._lastResult ? now - this._lastResult : null,
@@ -520,10 +657,14 @@ window.SPEECH = (function () {
       };
     }
 
-    /** Há fala captada pelo microfone ainda sem nenhum resultado do reconhecedor? */
+    /**
+     * Há fala captada pelo microfone ainda sem nenhum resultado do reconhecedor?
+     * A voz que já estava soando quando a sessão nasceu (a sessão é trocada no
+     * meio da repetição) não conta: só um trecho iniciado depois do início.
+     */
     waiting() {
       const m = this.meter;
-      return !!(this.active && this.rec && m && m.lastVoiceAt > this._lastResult && m.voicedMs > 250);
+      return !!(this.active && this.rec && m && m.lastVoiceAt > this._lastResult && m.voicedMs > 250 && m.lastAttemptAt >= this._startedAt);
     }
 
     restart(reason) {
@@ -576,7 +717,7 @@ window.SPEECH = (function () {
      * palavras que ela já tinha são descartadas e só o que vier depois conta
      * para a página nova (o reconhecedor emenda a fala nova na mesma parcial).
      */
-    reset() {
+    reset({ renew = true, why = 'nova página' } = {}) {
       const pending = this.interimResults.length > 0;
       const now = Date.now();
       const age = this.rec ? now - this._startedAt : 0;
@@ -592,9 +733,11 @@ window.SPEECH = (function () {
       // renovação no meio da página cairia justo numa pausa entre palavras
       // (medido: caiu 1,5 s depois da troca de página, na primeira palavra).
       // A troca de página é a melhor hora: a criança ainda vai olhar o desenho.
-      const renew = sinceFirst > 30000 || (this.rec && !this._firstResultAt && age > 50000);
-      log('ouvinte', `reset (nova página) idade=${age}ms desde1ºResultado=${sinceFirst}ms sessão=${renew ? 'renovada' : 'mantida'}${pending ? ` parcial viva: descarta ${lastWords} palavra(s) já ouvidas` : ''}`);
-      if (renew) this.restart(`nova página com sessão de ${Math.round((sinceFirst || age) / 1000)}s`);
+      const old = sinceFirst > 30000 || (this.rec && !this._firstResultAt && age > 50000);
+      const doRenew = renew && old;
+      if (this.meter) this.meter.resetVoiced();   // a voz até aqui (página anterior, voz do jogo) não é tentativa
+      log('ouvinte', `reset (${why}) idade=${age}ms desde1ºResultado=${sinceFirst}ms sessão=${doRenew ? 'renovada' : 'mantida'}${pending ? ` parcial viva: descarta ${lastWords} palavra(s) já ouvidas` : ''}`);
+      if (doRenew) this.restart(`${why} com sessão de ${Math.round((sinceFirst || age) / 1000)}s`);
     }
 
     stop() {
@@ -604,6 +747,8 @@ window.SPEECH = (function () {
       clearInterval(this._watchdog);
       this._watchdog = null;
       if (this.rec) { try { this.rec.abort(); } catch (_) { /* ignore */ } this.rec = null; }
+      this.finalResults = [];
+      this.interimResults = [];
       this.h.onState && this.h.onState('idle');
     }
   }
@@ -698,14 +843,9 @@ window.SPEECH = (function () {
    */
   function probeLocal() {
     if (!supported) return;
-    const info = { available: typeof SR.available === 'function', install: typeof SR.install === 'function', processLocally: 'processLocally' in SR.prototype, phrases: 'phrases' in SR.prototype };
+    const info = { available: typeof SR.available === 'function', install: typeof SR.install === 'function', processLocally: 'processLocally' in SR.prototype, phrases: 'phrases' in SR.prototype, phraseCtor: typeof window.SpeechRecognitionPhrase === 'function' };
     log('local', 'API de reconhecimento no aparelho', info);
-    if (!info.available) return;
-    try {
-      SR.available({ langs: ['pt-BR'], processLocally: true })
-        .then((r) => log('local', `pt-BR no aparelho: ${r}`))
-        .catch((e) => log('local', 'available() falhou', String(e)));
-    } catch (e) { log('local', 'available() lançou', String(e)); }
+    if (localApi) localAvailable().then((r) => log('local', `pt-BR no aparelho: ${r}`));
   }
 
   /** Nome do motor de reconhecimento que o navegador usa (só para informar). */
@@ -718,5 +858,5 @@ window.SPEECH = (function () {
     return 'do navegador';
   }
 
-  return { supported, ttsSupported, normalize, tokenize, phon, similar, why, isEcho, matchProgress, computeProgress, attemptStart, shortBurst, Tracker, Meter, Listener, speak, stopSpeaking, pickVoice, recognizerName, probeLocal };
+  return { supported, ttsSupported, localApi, localAvailable, localInstall, normalize, tokenize, phon, similar, why, isEcho, matchProgress, computeProgress, attemptStart, shortBurst, Tracker, Meter, Listener, speak, stopSpeaking, pickVoice, recognizerName, probeLocal };
 })();

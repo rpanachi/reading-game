@@ -45,6 +45,44 @@ em uso aparece ao lado. O serviço Edge TTS por WebSocket (usado no projeto
 reels-generator) recusa conexões vindas de páginas web (HTTP 403 para
 qualquer Origin de navegador), por isso ele só funcionaria com um proxy.
 
+## Reconhecimento no aparelho (Chrome 139+)
+
+O Chrome recente sabe reconhecer fala **no próprio computador**, sem mandar o
+áudio para o Google (`SpeechRecognition.available` / `install` /
+`processLocally`). **É o modo padrão do jogo.** Ao abrir a página o jogo
+pede ao Chrome o pacote pt-BR: se já está instalado, usa na hora; se é
+"baixável", começa o download (uma vez só, algumas dezenas de MB) e mostra
+"⏳ Preparando o reconhecimento no aparelho…" no rodapé enquanto usa a
+nuvem; quando o pacote fica pronto, passa para o aparelho (na próxima
+página, se uma leitura estiver em andamento). O Chrome pode exigir um
+clique do usuário para autorizar o download: se a tentativa ao abrir não
+vale, o jogo repete no primeiro clique em qualquer lugar da tela.
+
+Nesse modo o jogo passa ao reconhecedor **as palavras da página**
+(`phrases`, peso 3 numa escala de 0 a 10): ele dá preferência a elas, o que
+ajuda exatamente nas palavras curtas ditas sozinhas ("era" em vez de
+"ela"). Também não existe a demora de abrir uma sessão na nuvem (1 a 4 s, e
+às vezes ela nem responde).
+
+Medido no Chrome 149 (Mac): sessões abrem em 2–7 ms, resultados com
+confiança 1.00 e latência de 0,3 a 0,5 s enquanto o reconhecedor está
+"fluindo"; na primeira vez depois de instalar o pacote ele levou ~1 min
+para responder (carga do modelo), e a "surdez" depois de um resultado
+final também acontece no aparelho (é do Chrome, não do servidor) — o
+reinício por repetição resolve em ~3 s, e no aparelho a sessão nova
+responde em menos de 1 s.
+
+Só quando algo falha — navegador sem a API, pacote indisponível, download
+que não termina (10 min) ou o reconhecedor recusando pt-BR
+(`language-not-supported`, tentado duas vezes) — o jogo volta para a nuvem
+e mostra o aviso "⚠️ Reconhecimento no aparelho indisponível (…)" embaixo,
+na tela de compor e na de leitura. Esses erros chegam sem `onend`, por isso
+a sessão morta é descartada à mão (o mesmo vale para qualquer erro ao abrir
+uma sessão, com nova tentativa em 1 s, dobrando até 10 s;
+`phrases-not-supported` segue no aparelho sem as palavras). Em modo DEBUG,
+`?local=available|downloadable|downloading|unavailable` força o estado
+inicial do pacote para testar a tela.
+
 ## Publicação (GitHub Pages)
 
 O site está publicado em <https://reading-game.rpanachi.com/> pelo
@@ -83,7 +121,8 @@ soando quando a tela avançou) e a repetição da palavra anterior (a criança
 a repete porque a tela demorou a avançar; o acompanhamento reconhece o eco)
 não contam, senão viravam alarmes falsos. Nesse instante o log ganha uma linha `TRAVOU` com a
 fotografia completa do estado (página, palavra atual, ponteiros do
-acompanhamento, idade da sessão, tempo sem resposta, nível do microfone),
+acompanhamento, modo nuvem/aparelho, idade da sessão, tempo sem resposta,
+nível do microfone),
 despeja o anel como contexto do que veio antes e passa a registrar tudo até a
 linha `DESTRAVOU`, que diz o que fez a leitura andar e quanto tempo demorou.
 O botão copia esse log inteiro. No carregamento, o log também diz se o
@@ -124,10 +163,16 @@ cenários que já travaram.
    reconhecedor numa sessão nova leva 1 a 2 s, então palavras curtas ditas
    sozinhas morriam sem resultado (30 de 97 sessões num teste real). "Uma
    palavra por vez" é garantido pelo acompanhamento (item 4), não pela
-   sessão. A escuta liga assim que a criança clica na primeira opção da
-   tela de compor (a primeira sessão da página leva 2 s só para abrir o
-   microfone e às vezes nem responde; assim ela já está aquecida quando a
-   leitura começa) e a sessão **não é reiniciada ao virar a página**: uma
+   sessão. A escuta liga ao abrir a página, se o microfone já foi liberado
+   numa visita anterior, ou no primeiro clique na tela de compor (a
+   primeira sessão da página leva 2 s só para abrir o microfone e às vezes
+   nem responde; o reconhecedor do aparelho leva até um minuto para
+   carregar o modelo na primeira vez; assim tudo isso acontece enquanto a
+   história é montada). O botão "Ouvir" e o toque nas palavras **não param
+   a escuta**: parar custava uma sessão nova e, no aparelho, descarregava o
+   modelo (~9 s para voltar); em vez disso os resultados são ignorados
+   enquanto o jogo fala e descartados no fim (o Chrome só permite uma
+   sessão de reconhecimento por página). A sessão **não é reiniciada ao virar a página**: uma
    sessão nova leva de 0,3 a 6 s para dar a primeira resposta (e às vezes
    nem responde à primeira palavra curta), então só os resultados antigos
    são descartados e, se uma parcial estava viva, as palavras que ela já
@@ -139,7 +184,9 @@ cenários que já travaram.
    (`phon` em `js/speech.js`): "gato"/"gatu", "chamado"/"xamadu",
    "vez"/"ves", "sol"/"sou", "bem"/"ben", "falar"/"fala" viram a mesma
    chave. Chaves iguais casam; chaves longas toleram 1 a 3 letras de
-   diferença (Levenshtein). Leitura silabada ("ca cho rro") também casa.
+   diferença (Levenshtein); uma troca de r por l ("era" → "ela", "brincar"
+   → "blincar"), comum na fala infantil, também casa. Leitura silabada
+   ("ca cho rro") também casa.
 4. As palavras ouvidas avançam um ponteiro pelo texto, sempre a partir da
    palavra que está destacada na tela (o ponteiro nunca volta, mesmo que o
    navegador reinicie a sessão de reconhecimento). **A busca alcança sempre a
@@ -169,9 +216,14 @@ cenários que já travaram.
    a palavra é marcada em amarelo (pulada) e a leitura segue. A leitura é
    sempre de uma palavra por vez; duas ou três ditas juntas também casam.
 6. Um vigia (2x por segundo) protege a sessão. Toda fala captada (a partir
-   de 250 ms de voz) tem que ser respondida: se 2 s depois de a criança calar nenhum resultado chegou
-   (1,2 s numa sessão que ainda não respondeu nada), o reconhecedor travou
-   nesse enunciado e a sessão é reiniciada. Se a criança **repete** a
+   de 250 ms de voz; um estalo de 30 ms não conta) tem que ser respondida:
+   se 2 s depois de a criança calar nenhum resultado chegou (2,5 s numa
+   sessão que ainda não respondeu nada, porque a primeira resposta de uma
+   sessão nova leva de 1 a 4 s), o reconhecedor travou nesse enunciado e a
+   sessão é reiniciada. A voz que já soava quando a sessão nasceu não conta
+   (a sessão é trocada no meio da repetição). Quando não há nada para ler
+   (tela de compor, página completa) a conversa não reinicia nada: só a
+   renovação por idade. Se a criança **repete** a
    palavra (dois trechos de voz desde o último resultado) e nada chegou
    2,5 s depois do primeiro, a sessão é reiniciada na hora, sem esperar
    pausa: medido no diagnóstico, o reconhecedor do Chrome fica mudo de 4 a

@@ -6,7 +6,7 @@
   const $$ = (s) => Array.from(document.querySelectorAll(s));
   const D = window.GAME_DATA;
   const VOICES = { francisca: { label: 'feminina', gender: 'f' }, antonio: { label: 'masculina', gender: 'm' } };
-  const APP_VERSION = '15'; // aparece no rodapé da página de leitura; suba junto com o ?v= do index.html
+  const APP_VERSION = '17'; // aparece no rodapé da página de leitura; suba junto com o ?v= do index.html
   const log = (tag, msg, data) => DIAG.log(tag, msg, data);
   const detail = (tag, msg, data) => DIAG.detail(tag, msg, data);
   const STUCK_MS = 3000;   // palavra sem avanço, com a criança falando: liga o diagnóstico minucioso
@@ -22,6 +22,9 @@
     firstVoiceAt: 0, // início da primeira tentativa (o travamento conta a partir daqui)
   };
   try { const v = localStorage.getItem('voz'); if (v && VOICES[v]) state.voice = v; } catch (_) { /* sem storage */ }
+  // Reconhecimento no próprio aparelho (Chrome 139+) é o padrão: o pacote
+  // pt-BR é baixado ao abrir a página; só se falhar o jogo usa a nuvem.
+  const local = { status: '', ready: false, failed: false, needsGesture: false, poll: null, since: 0 };
 
   /* ---------- sons (WebAudio, sem arquivos) ---------- */
   const audio = {
@@ -101,17 +104,103 @@
   // criança começa a montar a história, para a sessão já estar pronta e
   // aquecida quando a leitura começar.
   let warmed = false;
-  function warmUp() {
+  function warmUp(why = 'na tela de compor') {
     if (warmed || !SPEECH.supported) return;
     warmed = true;
-    log('app', 'aquecendo o reconhecimento na tela de compor');
+    log('app', `aquecendo o reconhecimento ${why}`);
     listener.start();
     setMicReady('🎤 preparando o microfone…');
+  }
+  /**
+   * Se o microfone já foi liberado numa visita anterior, a escuta liga ao
+   * abrir a página, sem esperar o primeiro clique: o reconhecedor do aparelho
+   * leva até um minuto para carregar o modelo na primeira vez (medido) e
+   * assim carrega enquanto a história é montada.
+   */
+  async function warmUpIfAllowed() {
+    if (!SPEECH.supported || !navigator.permissions || !navigator.permissions.query) return;
+    try {
+      const p = await navigator.permissions.query({ name: 'microphone' });
+      log('app', `permissão do microfone: ${p.state}`);
+      if (p.state === 'granted') warmUp('ao abrir a página (microfone já liberado)');
+    } catch (e) { log('app', 'permissions.query falhou', String(e)); }
   }
   function setMicReady(text) {
     const el = $('#mic-ready');
     el.textContent = text;
     el.hidden = !text;
+  }
+
+  /* ---------- reconhecimento no aparelho (Chrome 139+): o padrão ---------- */
+  function localStatus(text) {
+    const box = $('#local-opt');
+    box.textContent = text || '';
+    box.hidden = !text;
+  }
+  /** Não deu (sem API, pacote indisponível, download ou ativação falhou): nuvem + aviso embaixo. */
+  function localFailed(reason) {
+    clearTimeout(local.poll);
+    local.failed = true; local.ready = false;
+    listener.setLocal(false);
+    const msg = `⚠️ Reconhecimento no aparelho indisponível (${reason}). Usando o reconhecimento pela internet.`;
+    localStatus(msg);                       // rodapé da tela de compor
+    $('#local-notice').textContent = msg;   // embaixo, na tela de leitura
+    $('#local-notice').hidden = false;
+    updateEngineLabel();
+    log('local', `indisponível: ${reason}`);
+  }
+  /** Pacote pronto: liga já (se não há leitura em andamento) ou na próxima página. */
+  function localReady() {
+    clearTimeout(local.poll);
+    local.ready = true; local.failed = false;
+    localStatus('');
+    log('local', `pacote pt-BR pronto${state.story && !listener.idle ? ' (liga na próxima página)' : ''}`);
+    if (!state.story || listener.idle) listener.setLocal(true);
+    updateEngineLabel();
+  }
+  async function setupLocal(forced) {
+    if (!SPEECH.localApi) { localFailed('este navegador não tem reconhecimento no aparelho'); return; }
+    const st = forced || await SPEECH.localAvailable();
+    local.status = st;
+    log('local', `pacote pt-BR no aparelho: ${st}`);
+    if (st === 'available') { localReady(); return; }
+    if (st !== 'downloadable' && st !== 'downloading') { localFailed('o Chrome não tem o pacote pt-BR'); return; }
+    localStatus('⏳ Preparando o reconhecimento no aparelho (baixando o pacote pt-BR)…');
+    local.since = Date.now();
+    pollLocal();
+    if (st === 'downloadable') installLocal(false);
+  }
+  /**
+   * Pede o download. O Chrome pode exigir um clique do usuário (transient
+   * activation): ao abrir a página tenta mesmo assim e, se não deu, tenta de
+   * novo no primeiro clique em qualquer lugar.
+   */
+  async function installLocal(fromGesture) {
+    log('local', `install() ${fromGesture ? 'no clique' : 'ao abrir a página'}`);
+    const ok = await SPEECH.localInstall();
+    const st = await SPEECH.localAvailable();
+    log('local', `install() devolveu ${ok}; pacote: ${st}`);
+    if (st === 'available') { localReady(); return; }
+    if (ok || st === 'downloading') return;   // baixando; o pollLocal avisa quando ficar pronto
+    if (!fromGesture) local.needsGesture = true;
+    else localFailed('o download do pacote pt-BR falhou');
+  }
+  document.addEventListener('click', () => {
+    if (!local.needsGesture) return;
+    local.needsGesture = false;
+    installLocal(true);
+  }, true);
+  function pollLocal() {
+    clearTimeout(local.poll);
+    local.poll = setTimeout(async () => {
+      if (local.ready || local.failed) return;
+      const st = await SPEECH.localAvailable();
+      if (st !== local.status) { local.status = st; log('local', `pacote pt-BR no aparelho: ${st}`); }
+      if (st === 'available') localReady();
+      else if (st === 'unavailable') localFailed('o Chrome não conseguiu baixar o pacote pt-BR');
+      else if (Date.now() - local.since > 10 * 60 * 1000) localFailed('o download do pacote pt-BR não terminou em 10 minutos');
+      else pollLocal();
+    }, 3000);
   }
 
   function select(key, id) {
@@ -135,10 +224,10 @@
     onWords(finals, interims, lastText, lastIsFinal) {
       if (!state.story || !state.tracker) { detail('app', 'resultado ignorado: sem história/tracker'); return; }
       detail('app', `onWords finais=${finals.length} parciais=${interims.length} texto="${lastText || ''}"${lastIsFinal ? ' FINAL' : ''} falando=${state.speaking} progresso=${state.progress}/${state.targets.length} atual="${currentWord()}"`);
-      // A contabilidade roda sempre (inclusive no aviso de fim de sessão que
-      // chega enquanto o jogo fala); só a tela e as dicas esperam o silêncio.
+      // Enquanto o jogo fala, o microfone ouve a voz do jogo: nada disso conta
+      // (o ouvinte descarta tudo no fim da fala).
+      if (state.speaking) { detail('app', 'jogo está falando: resultado ignorado'); return; }
       const r = state.tracker.update(finals, interims);
-      if (state.speaking) { detail('app', 'jogo está falando: tela não atualizada'); return; }
       // "Ouvi: …" mostra o que o reconhecedor entendeu (útil para diagnosticar);
       // "…" no fim significa resultado parcial, ainda em revisão. Quando a
       // interpretação difere do texto cru (ex.: "1" → "um"), ela aparece também.
@@ -172,6 +261,11 @@
     onRestart(reason) {
       log('app', `reinício do reconhecimento: ${reason}`);
     },
+    onLocal(on, reason) {
+      // O reconhecedor do aparelho recusou pt-BR duas vezes: nuvem + aviso embaixo.
+      log('app', `reconhecimento no aparelho ${on ? 'ligado' : 'desligado'}: ${reason}`);
+      if (!on) localFailed(`o Chrome recusou: ${reason}`);
+    },
     onState(s) {
       state.listening = s === 'listening';
       if (state.listening) meter.start();   // microfone já liberado: liga o medidor visual
@@ -196,8 +290,8 @@
     const n = Math.min(vuBars.length, Math.round(level * 25));
     vuBars.forEach((b, i) => b.classList.toggle('on', i < n));
     $('#vu').classList.toggle('voice', voice);
-    if (voice && state.story && !state.speaking && !state.firstVoiceAt) {
-      state.firstVoiceAt = SPEECH.attemptStart({ voiceOn: meter.voiceOn, voiceStartAt: meter.voiceStartAt, now: Date.now(), progressAt: state.progressAt, from: state.attemptFrom });
+    if (voice && state.story && !state.speaking && !state.firstVoiceAt && meter.segCounted) {
+      state.firstVoiceAt = SPEECH.attemptStart({ voiceOn: meter.voiceOn, voiceStartAt: meter.lastAttemptAt, now: Date.now(), progressAt: state.progressAt, from: state.attemptFrom });
     }
   });
   listener.meter = meter;
@@ -225,8 +319,8 @@
     const target = state.targets[state.progress];
     if (target.length !== 1) return;
     const now = Date.now();
-    if (!SPEECH.shortBurst({ voiceOn: meter.voiceOn, voiceStartAt: meter.voiceStartAt, lastVoiceAt: meter.lastVoiceAt, now, from: state.attemptFrom })) return;
-    log('app', `palavra curta "${currentWord()}" aceita pela voz: ${meter.lastVoiceAt - meter.voiceStartAt}ms de voz há ${now - meter.voiceStartAt}ms e nenhuma resposta`, { reconhecimento: listener.state() });
+    if (!meter.segCounted || !SPEECH.shortBurst({ voiceOn: meter.voiceOn, voiceStartAt: meter.lastAttemptAt, lastVoiceAt: meter.lastVoiceAt, now, from: state.attemptFrom })) return;
+    log('app', `palavra curta "${currentWord()}" aceita pela voz: ${meter.lastVoiceAt - meter.lastAttemptAt}ms de voz há ${now - meter.lastAttemptAt}ms e nenhuma resposta`, { reconhecimento: listener.state() });
     meter.resetVoiced();   // essa fala está resolvida: o vigia não precisa reiniciar por ela
     state.missFinals = 0;
     hideHint();
@@ -336,15 +430,21 @@
   function updateEngineLabel() {
     const v = SPEECH.pickVoice(VOICES[state.voice].gender);
     const tts = v ? `voz: ${v.name}` : 'sem voz disponível neste navegador';
-    const rec = SPEECH.supported ? ` · reconhecimento ${SPEECH.recognizerName()}` : '';
+    const rec = SPEECH.supported ? ` · reconhecimento ${listener.local ? 'no aparelho (Chrome)' : SPEECH.recognizerName()}` : '';
     $('#tts-engine').textContent = `${tts}${rec} · v${APP_VERSION}`;
   }
 
+  /**
+   * Fala do jogo (frase inteira ou uma palavra). A escuta continua ligada:
+   * parar a sessão custava uma sessão nova (1 a 4 s na nuvem; no aparelho o
+   * modelo descarregava e levava ~9 s para voltar). O que o microfone ouve
+   * enquanto o jogo fala é descartado: os resultados são ignorados durante a
+   * fala e, no fim, o ouvinte esquece o que ouviu (inclusive as palavras que
+   * uma parcial viva já tinha) e o acompanhamento recomeça dos finais novos.
+   */
   function speakText(text) {
     if (!text || state.speaking) return;
-    const wasListening = listener.active;
-    log('app', `falar "${text}" (microfone ${wasListening ? 'pausado' : 'já desligado'})`);
-    if (wasListening) listener.stop();   // o microfone não deve "ouvir" a própria voz do jogo
+    log('app', `falar "${text}" (microfone ${listener.active ? 'continua ligado, resultados ignorados' : 'desligado'})`);
     state.speaking = true;
     $('#btn-listen').disabled = true;
     setStatus('Ouça com atenção... 🔊');
@@ -352,9 +452,11 @@
       state.speaking = false;
       $('#btn-listen').disabled = false;
       // A voz do jogo que o microfone captou não é tentativa da criança.
+      if (listener.active) listener.reset({ renew: false, why: 'fim da voz do jogo' });
+      if (state.tracker) state.tracker.rebase();
       state.firstVoiceAt = 0;
       state.attemptFrom = Date.now() + 300;
-      if (wasListening) startListening(); else setStatus();
+      setStatus();
     };
     updateEngineLabel();
     SPEECH.speak(text, { gender: VOICES[state.voice].gender, onEnd: done });
@@ -385,6 +487,9 @@
     state.tokens = SPEECH.tokenize(slide.text);
     state.targets = state.tokens.filter((t) => t.wordIndex !== null).map((t) => t.norm);
     state.tracker = new SPEECH.Tracker(state.targets);
+    listener.idle = false;
+    if (local.ready && !listener.local) listener.setLocal(true);   // pacote ficou pronto durante a página anterior
+    listener.setPhrases(state.tokens.filter((t) => t.wordIndex !== null).map((t) => t.text.replace(/[^\p{L}\p{N}'-]/gu, '')));
     log('página', `${i + 1}/${state.story.slides.length} "${slide.text}"`, { alvos: state.targets.map((w, k) => `#${k}${w}`).join(' ') });
     const scene = $('#scene');
     scene.classList.remove('done');
@@ -461,6 +566,7 @@
 
   function onSlideComplete() {
     log('app', 'página completa');
+    listener.idle = true;   // conversa até a próxima página não é tentativa de leitura
     audio.ding();
     hideHint();
     $('#scene').classList.add('done');
@@ -511,6 +617,7 @@
   function backToCompose() {
     SPEECH.stopSpeaking();
     state.story = null;
+    listener.idle = true;
     showScreen('compose');
     if (listener.active) setMicReady('🎤 microfone pronto');
   }
@@ -554,6 +661,9 @@
   $('#btn-diag').hidden = !DIAG.enabled;
   log('app', `versão ${APP_VERSION} carregada`, { reconhecimento: SPEECH.supported, recognizer: SPEECH.recognizerName(), voz: SPEECH.ttsSupported });
   if (DIAG.enabled) SPEECH.probeLocal();
+  // Em modo DEBUG, ?local=available|downloadable|downloading|unavailable força o estado inicial do pacote (para testar a tela).
+  const forcedLocal = DIAG.enabled && new URLSearchParams(location.search).get('local');
+  if (SPEECH.supported) setupLocal(forcedLocal || '').then(warmUpIfAllowed);
   renderComposer();
   updateMicUI();
   updateEngineLabel();
