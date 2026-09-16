@@ -45,6 +45,25 @@ em uso aparece ao lado. O serviço Edge TTS por WebSocket (usado no projeto
 reels-generator) recusa conexões vindas de páginas web (HTTP 403 para
 qualquer Origin de navegador), por isso ele só funcionaria com um proxy.
 
+## Reconhecimento no aparelho (Chrome 139+)
+
+O Chrome recente sabe reconhecer fala **no próprio computador**, sem mandar o
+áudio para o Google (`SpeechRecognition.available` / `install` /
+`processLocally`). Para pt-BR o pacote vem como "baixável": na tela de
+compor aparece o botão **"⬇️ Baixar reconhecimento no aparelho"**, que pede
+ao Chrome para baixar o modelo (uma vez só, algumas dezenas de MB). Depois
+disso a opção "Reconhecimento no aparelho" fica marcada e guardada no
+navegador; dá para desligar na mesma tela.
+
+Nesse modo o jogo passa ao reconhecedor **as palavras da página**
+(`phrases`, peso 3 numa escala de 0 a 10): ele dá preferência a elas, o que
+ajuda exatamente nas palavras curtas ditas sozinhas ("era" em vez de
+"ela"). Também não existe a demora de abrir uma sessão na nuvem (1 a 4 s, e
+às vezes ela nem responde). Se o pacote não estiver disponível, o
+reconhecedor responde `language-not-supported` e o jogo volta sozinho para
+a nuvem, avisando. Em modo DEBUG, `?local=available|downloadable|downloading`
+força o estado da opção para testar a tela.
+
 ## Publicação (GitHub Pages)
 
 O site está publicado em <https://reading-game.rpanachi.com/> pelo
@@ -83,7 +102,8 @@ soando quando a tela avançou) e a repetição da palavra anterior (a criança
 a repete porque a tela demorou a avançar; o acompanhamento reconhece o eco)
 não contam, senão viravam alarmes falsos. Nesse instante o log ganha uma linha `TRAVOU` com a
 fotografia completa do estado (página, palavra atual, ponteiros do
-acompanhamento, idade da sessão, tempo sem resposta, nível do microfone),
+acompanhamento, modo nuvem/aparelho, idade da sessão, tempo sem resposta,
+nível do microfone),
 despeja o anel como contexto do que veio antes e passa a registrar tudo até a
 linha `DESTRAVOU`, que diz o que fez a leitura andar e quanto tempo demorou.
 O botão copia esse log inteiro. No carregamento, o log também diz se o
@@ -139,7 +159,9 @@ cenários que já travaram.
    (`phon` em `js/speech.js`): "gato"/"gatu", "chamado"/"xamadu",
    "vez"/"ves", "sol"/"sou", "bem"/"ben", "falar"/"fala" viram a mesma
    chave. Chaves iguais casam; chaves longas toleram 1 a 3 letras de
-   diferença (Levenshtein). Leitura silabada ("ca cho rro") também casa.
+   diferença (Levenshtein); uma troca de r por l ("era" → "ela", "brincar"
+   → "blincar"), comum na fala infantil, também casa. Leitura silabada
+   ("ca cho rro") também casa.
 4. As palavras ouvidas avançam um ponteiro pelo texto, sempre a partir da
    palavra que está destacada na tela (o ponteiro nunca volta, mesmo que o
    navegador reinicie a sessão de reconhecimento). **A busca alcança sempre a
@@ -169,9 +191,14 @@ cenários que já travaram.
    a palavra é marcada em amarelo (pulada) e a leitura segue. A leitura é
    sempre de uma palavra por vez; duas ou três ditas juntas também casam.
 6. Um vigia (2x por segundo) protege a sessão. Toda fala captada (a partir
-   de 250 ms de voz) tem que ser respondida: se 2 s depois de a criança calar nenhum resultado chegou
-   (1,2 s numa sessão que ainda não respondeu nada), o reconhecedor travou
-   nesse enunciado e a sessão é reiniciada. Se a criança **repete** a
+   de 250 ms de voz; um estalo de 30 ms não conta) tem que ser respondida:
+   se 2 s depois de a criança calar nenhum resultado chegou (2,5 s numa
+   sessão que ainda não respondeu nada, porque a primeira resposta de uma
+   sessão nova leva de 1 a 4 s), o reconhecedor travou nesse enunciado e a
+   sessão é reiniciada. A voz que já soava quando a sessão nasceu não conta
+   (a sessão é trocada no meio da repetição). Quando não há nada para ler
+   (tela de compor, página completa) a conversa não reinicia nada: só a
+   renovação por idade. Se a criança **repete** a
    palavra (dois trechos de voz desde o último resultado) e nada chegou
    2,5 s depois do primeiro, a sessão é reiniciada na hora, sem esperar
    pausa: medido no diagnóstico, o reconhecedor do Chrome fica mudo de 4 a

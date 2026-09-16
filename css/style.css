@@ -79,6 +79,10 @@ svg { display: block; }
 .card.selected .check { display: flex; }
 
 .mic-ready { align-self: center; font-size: 14px; color: var(--muted); white-space: nowrap; }
+.local-opt { flex-basis: 100%; text-align: center; font-size: 14px; color: var(--muted); }
+.local-opt .switch { justify-content: center; }
+.local-opt .switch input { width: 16px; height: 16px; }
+.local-opt .link { font-size: 14px; }
 .compose-bar {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
   display: flex; justify-content: center; align-items: center; gap: 16px; padding: 14px 20px; flex-wrap: wrap;

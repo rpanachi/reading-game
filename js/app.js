@@ -6,7 +6,7 @@
   const $$ = (s) => Array.from(document.querySelectorAll(s));
   const D = window.GAME_DATA;
   const VOICES = { francisca: { label: 'feminina', gender: 'f' }, antonio: { label: 'masculina', gender: 'm' } };
-  const APP_VERSION = '15'; // aparece no rodapé da página de leitura; suba junto com o ?v= do index.html
+  const APP_VERSION = '16'; // aparece no rodapé da página de leitura; suba junto com o ?v= do index.html
   const log = (tag, msg, data) => DIAG.log(tag, msg, data);
   const detail = (tag, msg, data) => DIAG.detail(tag, msg, data);
   const STUCK_MS = 3000;   // palavra sem avanço, com a criança falando: liga o diagnóstico minucioso
@@ -22,6 +22,9 @@
     firstVoiceAt: 0, // início da primeira tentativa (o travamento conta a partir daqui)
   };
   try { const v = localStorage.getItem('voz'); if (v && VOICES[v]) state.voice = v; } catch (_) { /* sem storage */ }
+  // Reconhecimento no próprio aparelho (Chrome 139+): escolha do responsável, guardada.
+  state.local = false;
+  try { state.local = localStorage.getItem('reconhecimento') === 'aparelho'; } catch (_) { /* sem storage */ }
 
   /* ---------- sons (WebAudio, sem arquivos) ---------- */
   const audio = {
@@ -114,6 +117,61 @@
     el.hidden = !text;
   }
 
+  /* ---------- reconhecimento no aparelho (Chrome 139+) ---------- */
+  function setLocalPref(on) {
+    state.local = !!on;
+    try { localStorage.setItem('reconhecimento', on ? 'aparelho' : 'nuvem'); } catch (_) { /* sem storage */ }
+    listener.setLocal(on);
+    const t = $('#local-toggle');
+    if (t) t.checked = !!on;
+    updateEngineLabel();
+  }
+  /** Mostra na tela de compor o estado do pacote pt-BR do aparelho e a opção. */
+  function renderLocalOpt(status) {
+    const box = $('#local-opt');
+    log('local', `pacote pt-BR no aparelho: ${status}`);
+    if (status === 'available') {
+      box.innerHTML = '<label class="switch"><input type="checkbox" id="local-toggle"> Reconhecimento no aparelho <span class="engine">(offline, dá preferência às palavras da página)</span></label>';
+      $('#local-toggle').checked = state.local;
+      $('#local-toggle').addEventListener('change', (e) => { log('app', `opção reconhecimento no aparelho: ${e.target.checked}`); setLocalPref(e.target.checked); });
+      if (state.local) listener.setLocal(true);
+    } else if (status === 'downloadable') {
+      box.innerHTML = '<button id="btn-local-install" class="link" type="button">⬇️ Baixar reconhecimento no aparelho (funciona offline e entende melhor palavras soltas)</button>';
+      $('#btn-local-install').addEventListener('click', installLocal);
+      if (state.local) setLocalPref(false);   // a preferência guardada não vale sem o pacote
+    } else if (status === 'downloading') {
+      box.textContent = '⏳ Baixando o reconhecimento no aparelho…';
+      pollLocal();
+    } else {
+      box.hidden = true;
+      if (state.local) { state.local = false; listener.local = false; }
+      return;
+    }
+    box.hidden = false;
+  }
+  let localPoll = null;
+  function pollLocal() {
+    clearTimeout(localPoll);
+    localPoll = setTimeout(async () => {
+      const st = await SPEECH.localAvailable();
+      if (st === 'downloading') pollLocal();
+      else renderLocalOpt(st);
+    }, 3000);
+  }
+  async function installLocal() {
+    log('app', 'baixar reconhecimento no aparelho');
+    $('#local-opt').textContent = '⏳ Baixando o reconhecimento no aparelho…';
+    pollLocal();
+    const ok = await SPEECH.localInstall();
+    log('local', `install() devolveu ${ok}`);
+    const st = await SPEECH.localAvailable();
+    clearTimeout(localPoll);
+    if (st === 'available') { setLocalPref(true); renderLocalOpt(st); }
+    else if (st === 'downloading') { pollLocal(); }
+    else if (st === 'downloadable') { renderLocalOpt(st); $('#local-opt').insertAdjacentText('beforeend', ' (não deu para baixar agora; tente de novo)'); }
+    else { $('#local-opt').hidden = false; $('#local-opt').textContent = '⚠️ O Chrome não conseguiu baixar o reconhecimento no aparelho.'; }
+  }
+
   function select(key, id) {
     warmUp();
     state.sel[key] = id;
@@ -172,6 +230,12 @@
     onRestart(reason) {
       log('app', `reinício do reconhecimento: ${reason}`);
     },
+    onLocal(on, reason) {
+      // O reconhecedor local falhou (pacote pt-BR ausente): volta para a nuvem e desmarca a opção.
+      setLocalPref(on);
+      showNotice('local-failed');
+      log('app', `reconhecimento no aparelho ${on ? 'ligado' : 'desligado'}: ${reason}`);
+    },
     onState(s) {
       state.listening = s === 'listening';
       if (state.listening) meter.start();   // microfone já liberado: liga o medidor visual
@@ -196,8 +260,8 @@
     const n = Math.min(vuBars.length, Math.round(level * 25));
     vuBars.forEach((b, i) => b.classList.toggle('on', i < n));
     $('#vu').classList.toggle('voice', voice);
-    if (voice && state.story && !state.speaking && !state.firstVoiceAt) {
-      state.firstVoiceAt = SPEECH.attemptStart({ voiceOn: meter.voiceOn, voiceStartAt: meter.voiceStartAt, now: Date.now(), progressAt: state.progressAt, from: state.attemptFrom });
+    if (voice && state.story && !state.speaking && !state.firstVoiceAt && meter.segCounted) {
+      state.firstVoiceAt = SPEECH.attemptStart({ voiceOn: meter.voiceOn, voiceStartAt: meter.lastAttemptAt, now: Date.now(), progressAt: state.progressAt, from: state.attemptFrom });
     }
   });
   listener.meter = meter;
@@ -225,8 +289,8 @@
     const target = state.targets[state.progress];
     if (target.length !== 1) return;
     const now = Date.now();
-    if (!SPEECH.shortBurst({ voiceOn: meter.voiceOn, voiceStartAt: meter.voiceStartAt, lastVoiceAt: meter.lastVoiceAt, now, from: state.attemptFrom })) return;
-    log('app', `palavra curta "${currentWord()}" aceita pela voz: ${meter.lastVoiceAt - meter.voiceStartAt}ms de voz há ${now - meter.voiceStartAt}ms e nenhuma resposta`, { reconhecimento: listener.state() });
+    if (!meter.segCounted || !SPEECH.shortBurst({ voiceOn: meter.voiceOn, voiceStartAt: meter.lastAttemptAt, lastVoiceAt: meter.lastVoiceAt, now, from: state.attemptFrom })) return;
+    log('app', `palavra curta "${currentWord()}" aceita pela voz: ${meter.lastVoiceAt - meter.lastAttemptAt}ms de voz há ${now - meter.lastAttemptAt}ms e nenhuma resposta`, { reconhecimento: listener.state() });
     meter.resetVoiced();   // essa fala está resolvida: o vigia não precisa reiniciar por ela
     state.missFinals = 0;
     hideHint();
@@ -298,6 +362,7 @@
     'not-allowed': 'O microfone não foi liberado. Permita o acesso ao microfone no navegador e clique no botão 🎤.',
     'no-mic': 'Nenhum microfone foi encontrado. Conecte um microfone e clique no botão 🎤.',
     network: 'O reconhecimento de voz precisa de internet e não conseguiu conectar. Verifique a conexão e clique no botão 🎤.',
+    'local-failed': 'O reconhecimento no aparelho não está disponível neste navegador; voltei para o reconhecimento pela internet.',
   };
   function showNotice(kind) {
     const n = $('#notice');
@@ -336,7 +401,7 @@
   function updateEngineLabel() {
     const v = SPEECH.pickVoice(VOICES[state.voice].gender);
     const tts = v ? `voz: ${v.name}` : 'sem voz disponível neste navegador';
-    const rec = SPEECH.supported ? ` · reconhecimento ${SPEECH.recognizerName()}` : '';
+    const rec = SPEECH.supported ? ` · reconhecimento ${listener.local ? 'no aparelho (Chrome)' : SPEECH.recognizerName()}` : '';
     $('#tts-engine').textContent = `${tts}${rec} · v${APP_VERSION}`;
   }
 
@@ -385,6 +450,8 @@
     state.tokens = SPEECH.tokenize(slide.text);
     state.targets = state.tokens.filter((t) => t.wordIndex !== null).map((t) => t.norm);
     state.tracker = new SPEECH.Tracker(state.targets);
+    listener.idle = false;
+    listener.setPhrases(state.tokens.filter((t) => t.wordIndex !== null).map((t) => t.text.replace(/[^\p{L}\p{N}'-]/gu, '')));
     log('página', `${i + 1}/${state.story.slides.length} "${slide.text}"`, { alvos: state.targets.map((w, k) => `#${k}${w}`).join(' ') });
     const scene = $('#scene');
     scene.classList.remove('done');
@@ -461,6 +528,7 @@
 
   function onSlideComplete() {
     log('app', 'página completa');
+    listener.idle = true;   // conversa até a próxima página não é tentativa de leitura
     audio.ding();
     hideHint();
     $('#scene').classList.add('done');
@@ -511,6 +579,7 @@
   function backToCompose() {
     SPEECH.stopSpeaking();
     state.story = null;
+    listener.idle = true;
     showScreen('compose');
     if (listener.active) setMicReady('🎤 microfone pronto');
   }
@@ -552,8 +621,12 @@
 
   // O botão de diagnóstico só existe em modo DEBUG (local ou ?debug=1).
   $('#btn-diag').hidden = !DIAG.enabled;
-  log('app', `versão ${APP_VERSION} carregada`, { reconhecimento: SPEECH.supported, recognizer: SPEECH.recognizerName(), voz: SPEECH.ttsSupported });
+  log('app', `versão ${APP_VERSION} carregada`, { reconhecimento: SPEECH.supported, recognizer: SPEECH.recognizerName(), voz: SPEECH.ttsSupported, preferencia: state.local ? 'aparelho' : 'nuvem' });
   if (DIAG.enabled) SPEECH.probeLocal();
+  // Em modo DEBUG, ?local=available|downloadable|downloading força o estado da opção (para testar a tela).
+  const forcedLocal = DIAG.enabled && new URLSearchParams(location.search).get('local');
+  if (forcedLocal) renderLocalOpt(forcedLocal);
+  else if (SPEECH.localApi) SPEECH.localAvailable().then(renderLocalOpt);
   renderComposer();
   updateMicUI();
   updateEngineLabel();
