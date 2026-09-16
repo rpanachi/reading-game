@@ -431,7 +431,7 @@ window.SPEECH = (function () {
     }
 
     _applyPhrases(rec) {
-      if (!this.local || typeof window.SpeechRecognitionPhrase !== 'function') return;
+      if (!this.local || this._noPhrases || typeof window.SpeechRecognitionPhrase !== 'function') return;
       try {
         rec.phrases = this.phrases.map((w) => new window.SpeechRecognitionPhrase(w, PHRASE_BOOST));
         detail('ouvinte', `${this.phrases.length} palavras enviadas ao reconhecedor local`);
@@ -478,7 +478,8 @@ window.SPEECH = (function () {
       this._firstResultAt = 0;
       this._speechAt = 0;
       if (this.meter) this.meter.resetVoiced();
-      rec.onstart = () => { log('sessão', `#${id} onstart (${age()} após start)${this.local ? ' no aparelho' : ''}`); this.h.onState && this.h.onState('listening'); };
+      let started = false;
+      rec.onstart = () => { started = true; this._startFails = 0; log('sessão', `#${id} onstart (${age()} após start)${this.local ? ' no aparelho' : ''}`); if (this.local) this._localFails = 0; this.h.onState && this.h.onState('listening'); };
       rec.onaudiostart = () => detail('sessão', `#${id} onaudiostart ${age()}`);
       rec.onsoundstart = () => detail('sessão', `#${id} onsoundstart ${age()}`);
       rec.onspeechstart = () => { detail('sessão', `#${id} onspeechstart ${age()}`); if (!this._speechAt) this._speechAt = Date.now(); this.h.onActivity && this.h.onActivity(true); };
@@ -503,16 +504,39 @@ window.SPEECH = (function () {
         if (err === 'not-allowed' || err === 'service-not-allowed') { this.active = false; this.h.onError && this.h.onError('not-allowed'); }
         else if (err === 'audio-capture') { this.active = false; this.h.onError && this.h.onError('no-mic'); }
         else if (err === 'network') { this.active = false; this.h.onError && this.h.onError('network'); }
+        else if (err === 'phrases-not-supported' && this.local) {
+          // O reconhecedor do aparelho não aceita as palavras como dica: segue
+          // no aparelho, só sem elas.
+          this._noPhrases = true;
+          log('ouvinte', 'reconhecedor do aparelho não aceita as palavras da página (phrases-not-supported); seguindo sem elas');
+          this._dropAndRespawn(rec, 0);
+        }
         else if (err === 'language-not-supported' && this.local) {
-          // O pacote pt-BR do aparelho não está disponível: volta para a nuvem.
-          // O Chrome não dispara onend depois deste erro (medido), então a
-          // sessão morta é descartada aqui e outra é aberta na nuvem.
-          this.local = false;
-          log('ouvinte', 'reconhecimento no aparelho indisponível (language-not-supported): voltando para a nuvem');
-          this.h.onLocal && this.h.onLocal(false, 'language-not-supported');
-          this.rec = null;
-          try { rec.abort(); } catch (_) { /* ignore */ }
-          if (this.active) this._restartTimer = setTimeout(() => this._spawn(), 0);
+          // O reconhecedor do aparelho recusou pt-BR. O Chrome não dispara
+          // onend depois deste erro (medido), então a sessão morta é descartada
+          // aqui. Uma segunda tentativa 1 s depois cobre o pacote que ainda está
+          // terminando de instalar; se falhar de novo, volta para a nuvem.
+          this._localFails = (this._localFails || 0) + 1;
+          if (this._localFails < 2) {
+            log('ouvinte', `reconhecedor do aparelho recusou pt-BR (${e.message || 'language-not-supported'}); tentando de novo em 1 s`);
+            localAvailable().then((st) => log('local', `pacote pt-BR no aparelho agora: ${st}`));
+            this._dropAndRespawn(rec, 1000);
+          } else {
+            this.local = false;
+            this._localFails = 0;
+            log('ouvinte', 'reconhecimento no aparelho indisponível (language-not-supported 2x): voltando para a nuvem');
+            this.h.onLocal && this.h.onLocal(false, e.message || 'language-not-supported');
+            this._dropAndRespawn(rec, 0);
+          }
+        }
+        else if (err !== 'no-speech' && err !== 'aborted' && !started) {
+          // Erro desconhecido antes de a sessão abrir: pode vir sem onend, e a
+          // sessão morta prenderia a escuta. Descarta e tenta de novo (1 s,
+          // dobrando até 10 s enquanto continuar falhando).
+          this._startFails = (this._startFails || 0) + 1;
+          const delay = Math.min(1000 * 2 ** (this._startFails - 1), 10000);
+          log('ouvinte', `sessão #${id} falhou ao abrir (${err}); nova tentativa em ${delay / 1000}s`);
+          this._dropAndRespawn(rec, delay);
         }
         // 'no-speech' e 'aborted' são normais: o onend reinicia a escuta.
       };
@@ -531,6 +555,15 @@ window.SPEECH = (function () {
       this.rec = rec;
       try { rec.start(); log('sessão', `#${id} start() chamado`); }
       catch (e) { log('sessão', `#${id} start() lançou`, String(e)); }
+    }
+
+    /** Descarta uma sessão que morreu sem onend e abre outra depois de `delay` ms. */
+    _dropAndRespawn(rec, delay) {
+      this.rec = null;
+      this.interimResults = [];
+      try { rec.abort(); } catch (_) { /* ignore */ }
+      clearTimeout(this._restartTimer);
+      if (this.active) this._restartTimer = setTimeout(() => this._spawn(), delay);
     }
 
     /**

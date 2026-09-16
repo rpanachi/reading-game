@@ -149,6 +149,30 @@
     }
     box.hidden = false;
   }
+  /** A opção foi desmarcada porque o Chrome recusou: mostra o motivo e deixa tentar de novo. */
+  async function renderLocalFailure(reason) {
+    const box = $('#local-opt');
+    box.hidden = false;
+    box.innerHTML = `⚠️ O Chrome não conseguiu usar o reconhecimento no aparelho (<code>${reason}</code>); usando a internet. `;
+    const st = await SPEECH.localAvailable();
+    log('local', `pacote pt-BR no aparelho depois da falha: ${st}`);
+    if (st === 'available') {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'link'; b.textContent = 'Tentar de novo';
+      b.addEventListener('click', () => { log('app', 'tentar de novo o reconhecimento no aparelho'); renderLocalOpt('available'); setLocalPref(true); });
+      box.appendChild(b);
+    } else if (st === 'downloadable') {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'link'; b.textContent = 'O pacote pt-BR não está instalado: baixar';
+      b.addEventListener('click', installLocal);
+      box.appendChild(b);
+    } else if (st === 'downloading') {
+      box.insertAdjacentText('beforeend', 'O pacote pt-BR ainda está baixando; a opção volta quando terminar.');
+      pollLocal();
+    } else {
+      box.insertAdjacentText('beforeend', `Estado do pacote pt-BR: ${st}.`);
+    }
+  }
   let localPoll = null;
   function pollLocal() {
     clearTimeout(localPoll);
@@ -231,10 +255,11 @@
       log('app', `reinício do reconhecimento: ${reason}`);
     },
     onLocal(on, reason) {
-      // O reconhecedor local falhou (pacote pt-BR ausente): volta para a nuvem e desmarca a opção.
-      setLocalPref(on);
-      showNotice('local-failed');
+      // O reconhecedor local falhou (pacote pt-BR ausente ou recusado): volta para
+      // a nuvem, desmarca a opção e explica onde o usuário está olhando.
       log('app', `reconhecimento no aparelho ${on ? 'ligado' : 'desligado'}: ${reason}`);
+      setLocalPref(on);
+      if (!on) { showNotice('local-failed'); renderLocalFailure(reason); }
     },
     onState(s) {
       state.listening = s === 'listening';

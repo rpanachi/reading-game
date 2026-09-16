@@ -59,10 +59,15 @@ Nesse modo o jogo passa ao reconhecedor **as palavras da página**
 (`phrases`, peso 3 numa escala de 0 a 10): ele dá preferência a elas, o que
 ajuda exatamente nas palavras curtas ditas sozinhas ("era" em vez de
 "ela"). Também não existe a demora de abrir uma sessão na nuvem (1 a 4 s, e
-às vezes ela nem responde). Se o pacote não estiver disponível, o
-reconhecedor responde `language-not-supported` e o jogo volta sozinho para
-a nuvem, avisando. Em modo DEBUG, `?local=available|downloadable|downloading`
-força o estado da opção para testar a tela.
+às vezes ela nem responde). Se o reconhecedor do aparelho recusar
+(`language-not-supported`), o jogo tenta de novo 1 s depois e então volta
+sozinho para a nuvem: a opção é desmarcada e a tela de compor mostra o
+motivo, o estado do pacote e o botão para tentar de novo ou baixar. Esse
+erro chega sem `onend`, por isso a sessão morta é descartada à mão (o
+mesmo vale para qualquer erro ao abrir uma sessão, com nova tentativa em
+1 s, dobrando até 10 s). Em modo DEBUG,
+`?local=available|downloadable|downloading` força o estado da opção para
+testar a tela.
 
 ## Publicação (GitHub Pages)
 
