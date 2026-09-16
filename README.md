@@ -49,25 +49,31 @@ qualquer Origin de navegador), por isso ele só funcionaria com um proxy.
 
 O Chrome recente sabe reconhecer fala **no próprio computador**, sem mandar o
 áudio para o Google (`SpeechRecognition.available` / `install` /
-`processLocally`). Para pt-BR o pacote vem como "baixável": na tela de
-compor aparece o botão **"⬇️ Baixar reconhecimento no aparelho"**, que pede
-ao Chrome para baixar o modelo (uma vez só, algumas dezenas de MB). Depois
-disso a opção "Reconhecimento no aparelho" fica marcada e guardada no
-navegador; dá para desligar na mesma tela.
+`processLocally`). **É o modo padrão do jogo.** Ao abrir a página o jogo
+pede ao Chrome o pacote pt-BR: se já está instalado, usa na hora; se é
+"baixável", começa o download (uma vez só, algumas dezenas de MB) e mostra
+"⏳ Preparando o reconhecimento no aparelho…" no rodapé enquanto usa a
+nuvem; quando o pacote fica pronto, passa para o aparelho (na próxima
+página, se uma leitura estiver em andamento). O Chrome pode exigir um
+clique do usuário para autorizar o download: se a tentativa ao abrir não
+vale, o jogo repete no primeiro clique em qualquer lugar da tela.
 
 Nesse modo o jogo passa ao reconhecedor **as palavras da página**
 (`phrases`, peso 3 numa escala de 0 a 10): ele dá preferência a elas, o que
 ajuda exatamente nas palavras curtas ditas sozinhas ("era" em vez de
 "ela"). Também não existe a demora de abrir uma sessão na nuvem (1 a 4 s, e
-às vezes ela nem responde). Se o reconhecedor do aparelho recusar
-(`language-not-supported`), o jogo tenta de novo 1 s depois e então volta
-sozinho para a nuvem: a opção é desmarcada e a tela de compor mostra o
-motivo, o estado do pacote e o botão para tentar de novo ou baixar. Esse
-erro chega sem `onend`, por isso a sessão morta é descartada à mão (o
-mesmo vale para qualquer erro ao abrir uma sessão, com nova tentativa em
-1 s, dobrando até 10 s). Em modo DEBUG,
-`?local=available|downloadable|downloading` força o estado da opção para
-testar a tela.
+às vezes ela nem responde).
+
+Só quando algo falha — navegador sem a API, pacote indisponível, download
+que não termina (10 min) ou o reconhecedor recusando pt-BR
+(`language-not-supported`, tentado duas vezes) — o jogo volta para a nuvem
+e mostra o aviso "⚠️ Reconhecimento no aparelho indisponível (…)" embaixo,
+na tela de compor e na de leitura. Esses erros chegam sem `onend`, por isso
+a sessão morta é descartada à mão (o mesmo vale para qualquer erro ao abrir
+uma sessão, com nova tentativa em 1 s, dobrando até 10 s;
+`phrases-not-supported` segue no aparelho sem as palavras). Em modo DEBUG,
+`?local=available|downloadable|downloading|unavailable` força o estado
+inicial do pacote para testar a tela.
 
 ## Publicação (GitHub Pages)
 

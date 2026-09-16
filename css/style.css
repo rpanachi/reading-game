@@ -80,9 +80,6 @@ svg { display: block; }
 
 .mic-ready { align-self: center; font-size: 14px; color: var(--muted); white-space: nowrap; }
 .local-opt { flex-basis: 100%; text-align: center; font-size: 14px; color: var(--muted); }
-.local-opt .switch { justify-content: center; }
-.local-opt .switch input { width: 16px; height: 16px; }
-.local-opt .link { font-size: 14px; }
 .compose-bar {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
   display: flex; justify-content: center; align-items: center; gap: 16px; padding: 14px 20px; flex-wrap: wrap;
@@ -138,6 +135,7 @@ svg { display: block; }
 .link { background: none; border: none; color: var(--muted); text-decoration: underline; font-size: 15px; padding: 4px; }
 
 .notice { margin-top: 14px; background: #fff3e0; border: 2px solid #ffb74d; border-radius: 16px; padding: 12px 16px; font-size: 16px; }
+.notice-soft { background: #f5f5f5; border-color: #cfd8dc; color: var(--muted); font-size: 14px; }
 
 /* ---------- tela: fim ---------- */
 .end-card { background: #fff; border-radius: 28px; box-shadow: var(--shadow); text-align: center; padding: 20px 24px 28px; max-width: 860px; margin: 24px auto; }
