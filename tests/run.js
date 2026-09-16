@@ -309,7 +309,7 @@ function fakeListener({ ageMs, sinceFirstMs, sinceResultMs, voicedMs, quietMs, p
   l._speechAt = 0;
   l.interimResults = pending ? [[['x']]] : [];
   // a última tentativa começou quando a voz começou (antes da pausa), salvo se dito ao contrário
-  l.meter = { voicedMs, lastVoiceAt: now - quietMs, level: 0, attempts, firstAttemptAt: firstAttemptMs ? now - firstAttemptMs : 0, lastAttemptAt: now - (attemptMs == null ? quietMs + voicedMs : attemptMs) };
+  l.meter = { voicedMs, lastVoiceAt: now - quietMs, level: 0, attempts, firstAttemptAt: firstAttemptMs ? now - firstAttemptMs : 0, lastAttemptAt: now - (attemptMs == null ? quietMs + voicedMs : attemptMs), resetVoiced() { this.voicedMs = 0; this.attempts = 0; this.firstAttemptAt = 0; } };
   l._check();
   return restarts;
 }
@@ -361,6 +361,26 @@ function pageTurn({ sinceFirstMs, ageMs }) {
   l._firstResultAt = sinceFirstMs == null ? 0 : now - sinceFirstMs;
   l.reset();
   return restarts.length;
+}
+{
+  // voz do jogo no meio da página: reset sem renovar, e o Tracker recomeça dos finais novos
+  const l = new S.Listener({});
+  const restarts = [];
+  l.active = true; l.idle = false;
+  l.rec = { abort() {} };
+  l.restart = (reason) => restarts.push(reason);
+  const now = Date.now();
+  l._startedAt = now - 40000; l._firstResultAt = now - 36000;
+  l.reset({ renew: false, why: 'fim da voz do jogo' });
+  check('reset sem renovar mantém a sessão velha', restarts.length, 0);
+  const tg = targetsOf('Era uma vez um gato chamado Tom.');
+  t = new S.Tracker(tg);
+  t.update([[say('era uma')], [say('vez')]], []);
+  check('três palavras lidas antes da voz do jogo', t.progress, 3);
+  t.rebase();
+  const r = t.update([[say('um gato')]], []);
+  check('depois do rebase o primeiro final novo é aplicado', t.progress, 5);
+  check('rebase não conta o final novo como erro', r.miss, false);
 }
 check('página nova com sessão de 35 s desde o 1º resultado renova', pageTurn({ sinceFirstMs: 35000, ageMs: 40000 }), 1);
 check('página nova com sessão de 24 s mantém', pageTurn({ sinceFirstMs: 24000, ageMs: 30000 }), 0);

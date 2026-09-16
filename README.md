@@ -64,6 +64,14 @@ ajuda exatamente nas palavras curtas ditas sozinhas ("era" em vez de
 "ela"). Também não existe a demora de abrir uma sessão na nuvem (1 a 4 s, e
 às vezes ela nem responde).
 
+Medido no Chrome 149 (Mac): sessões abrem em 2–7 ms, resultados com
+confiança 1.00 e latência de 0,3 a 0,5 s enquanto o reconhecedor está
+"fluindo"; na primeira vez depois de instalar o pacote ele levou ~1 min
+para responder (carga do modelo), e a "surdez" depois de um resultado
+final também acontece no aparelho (é do Chrome, não do servidor) — o
+reinício por repetição resolve em ~3 s, e no aparelho a sessão nova
+responde em menos de 1 s.
+
 Só quando algo falha — navegador sem a API, pacote indisponível, download
 que não termina (10 min) ou o reconhecedor recusando pt-BR
 (`language-not-supported`, tentado duas vezes) — o jogo volta para a nuvem
@@ -155,10 +163,16 @@ cenários que já travaram.
    reconhecedor numa sessão nova leva 1 a 2 s, então palavras curtas ditas
    sozinhas morriam sem resultado (30 de 97 sessões num teste real). "Uma
    palavra por vez" é garantido pelo acompanhamento (item 4), não pela
-   sessão. A escuta liga assim que a criança clica na primeira opção da
-   tela de compor (a primeira sessão da página leva 2 s só para abrir o
-   microfone e às vezes nem responde; assim ela já está aquecida quando a
-   leitura começa) e a sessão **não é reiniciada ao virar a página**: uma
+   sessão. A escuta liga ao abrir a página, se o microfone já foi liberado
+   numa visita anterior, ou no primeiro clique na tela de compor (a
+   primeira sessão da página leva 2 s só para abrir o microfone e às vezes
+   nem responde; o reconhecedor do aparelho leva até um minuto para
+   carregar o modelo na primeira vez; assim tudo isso acontece enquanto a
+   história é montada). O botão "Ouvir" e o toque nas palavras **não param
+   a escuta**: parar custava uma sessão nova e, no aparelho, descarregava o
+   modelo (~9 s para voltar); em vez disso os resultados são ignorados
+   enquanto o jogo fala e descartados no fim (o Chrome só permite uma
+   sessão de reconhecimento por página). A sessão **não é reiniciada ao virar a página**: uma
    sessão nova leva de 0,3 a 6 s para dar a primeira resposta (e às vezes
    nem responde à primeira palavra curta), então só os resultados antigos
    são descartados e, se uma parcial estava viva, as palavras que ela já

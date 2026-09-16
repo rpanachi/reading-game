@@ -237,6 +237,13 @@ window.SPEECH = (function () {
       this.progress = Math.max(this.progress, Math.min(p, this.target.length));
       this.committed = Math.max(this.committed, this.progress);
     }
+    /** O ouvinte descartou os resultados (voz do jogo): os próximos finais começam do zero. */
+    rebase() {
+      this.applied = 0;
+      this.liveAdvanced = false;
+      this.lastMiss = null;
+      this.committed = Math.max(this.committed, this.progress);
+    }
     update(finals, interims) {
       const before = this.progress;
       const len = this.target.length;
@@ -600,6 +607,7 @@ window.SPEECH = (function () {
       // demora 1 a 4 s para responder (e às vezes nem responde). Só a renovação
       // preventiva por idade continua valendo.
       if (this.idle) {
+        if (m) m.resetVoiced();   // conversa não acumula como tentativa (disparava na 1ª palavra da página)
         if (age > 45000 && quiet && silentFor > 1200) this.restart(`renovação preventiva ociosa (${Math.round(age / 1000)}s desde o 1º resultado)`);
         return;
       }
@@ -709,7 +717,7 @@ window.SPEECH = (function () {
      * palavras que ela já tinha são descartadas e só o que vier depois conta
      * para a página nova (o reconhecedor emenda a fala nova na mesma parcial).
      */
-    reset() {
+    reset({ renew = true, why = 'nova página' } = {}) {
       const pending = this.interimResults.length > 0;
       const now = Date.now();
       const age = this.rec ? now - this._startedAt : 0;
@@ -725,9 +733,11 @@ window.SPEECH = (function () {
       // renovação no meio da página cairia justo numa pausa entre palavras
       // (medido: caiu 1,5 s depois da troca de página, na primeira palavra).
       // A troca de página é a melhor hora: a criança ainda vai olhar o desenho.
-      const renew = sinceFirst > 30000 || (this.rec && !this._firstResultAt && age > 50000);
-      log('ouvinte', `reset (nova página) idade=${age}ms desde1ºResultado=${sinceFirst}ms sessão=${renew ? 'renovada' : 'mantida'}${pending ? ` parcial viva: descarta ${lastWords} palavra(s) já ouvidas` : ''}`);
-      if (renew) this.restart(`nova página com sessão de ${Math.round((sinceFirst || age) / 1000)}s`);
+      const old = sinceFirst > 30000 || (this.rec && !this._firstResultAt && age > 50000);
+      const doRenew = renew && old;
+      if (this.meter) this.meter.resetVoiced();   // a voz até aqui (página anterior, voz do jogo) não é tentativa
+      log('ouvinte', `reset (${why}) idade=${age}ms desde1ºResultado=${sinceFirst}ms sessão=${doRenew ? 'renovada' : 'mantida'}${pending ? ` parcial viva: descarta ${lastWords} palavra(s) já ouvidas` : ''}`);
+      if (doRenew) this.restart(`${why} com sessão de ${Math.round((sinceFirst || age) / 1000)}s`);
     }
 
     stop() {
@@ -737,6 +747,8 @@ window.SPEECH = (function () {
       clearInterval(this._watchdog);
       this._watchdog = null;
       if (this.rec) { try { this.rec.abort(); } catch (_) { /* ignore */ } this.rec = null; }
+      this.finalResults = [];
+      this.interimResults = [];
       this.h.onState && this.h.onState('idle');
     }
   }

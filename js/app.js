@@ -6,7 +6,7 @@
   const $$ = (s) => Array.from(document.querySelectorAll(s));
   const D = window.GAME_DATA;
   const VOICES = { francisca: { label: 'feminina', gender: 'f' }, antonio: { label: 'masculina', gender: 'm' } };
-  const APP_VERSION = '16'; // aparece no rodapé da página de leitura; suba junto com o ?v= do index.html
+  const APP_VERSION = '17'; // aparece no rodapé da página de leitura; suba junto com o ?v= do index.html
   const log = (tag, msg, data) => DIAG.log(tag, msg, data);
   const detail = (tag, msg, data) => DIAG.detail(tag, msg, data);
   const STUCK_MS = 3000;   // palavra sem avanço, com a criança falando: liga o diagnóstico minucioso
@@ -104,12 +104,26 @@
   // criança começa a montar a história, para a sessão já estar pronta e
   // aquecida quando a leitura começar.
   let warmed = false;
-  function warmUp() {
+  function warmUp(why = 'na tela de compor') {
     if (warmed || !SPEECH.supported) return;
     warmed = true;
-    log('app', 'aquecendo o reconhecimento na tela de compor');
+    log('app', `aquecendo o reconhecimento ${why}`);
     listener.start();
     setMicReady('🎤 preparando o microfone…');
+  }
+  /**
+   * Se o microfone já foi liberado numa visita anterior, a escuta liga ao
+   * abrir a página, sem esperar o primeiro clique: o reconhecedor do aparelho
+   * leva até um minuto para carregar o modelo na primeira vez (medido) e
+   * assim carrega enquanto a história é montada.
+   */
+  async function warmUpIfAllowed() {
+    if (!SPEECH.supported || !navigator.permissions || !navigator.permissions.query) return;
+    try {
+      const p = await navigator.permissions.query({ name: 'microphone' });
+      log('app', `permissão do microfone: ${p.state}`);
+      if (p.state === 'granted') warmUp('ao abrir a página (microfone já liberado)');
+    } catch (e) { log('app', 'permissions.query falhou', String(e)); }
   }
   function setMicReady(text) {
     const el = $('#mic-ready');
@@ -210,10 +224,10 @@
     onWords(finals, interims, lastText, lastIsFinal) {
       if (!state.story || !state.tracker) { detail('app', 'resultado ignorado: sem história/tracker'); return; }
       detail('app', `onWords finais=${finals.length} parciais=${interims.length} texto="${lastText || ''}"${lastIsFinal ? ' FINAL' : ''} falando=${state.speaking} progresso=${state.progress}/${state.targets.length} atual="${currentWord()}"`);
-      // A contabilidade roda sempre (inclusive no aviso de fim de sessão que
-      // chega enquanto o jogo fala); só a tela e as dicas esperam o silêncio.
+      // Enquanto o jogo fala, o microfone ouve a voz do jogo: nada disso conta
+      // (o ouvinte descarta tudo no fim da fala).
+      if (state.speaking) { detail('app', 'jogo está falando: resultado ignorado'); return; }
       const r = state.tracker.update(finals, interims);
-      if (state.speaking) { detail('app', 'jogo está falando: tela não atualizada'); return; }
       // "Ouvi: …" mostra o que o reconhecedor entendeu (útil para diagnosticar);
       // "…" no fim significa resultado parcial, ainda em revisão. Quando a
       // interpretação difere do texto cru (ex.: "1" → "um"), ela aparece também.
@@ -420,11 +434,17 @@
     $('#tts-engine').textContent = `${tts}${rec} · v${APP_VERSION}`;
   }
 
+  /**
+   * Fala do jogo (frase inteira ou uma palavra). A escuta continua ligada:
+   * parar a sessão custava uma sessão nova (1 a 4 s na nuvem; no aparelho o
+   * modelo descarregava e levava ~9 s para voltar). O que o microfone ouve
+   * enquanto o jogo fala é descartado: os resultados são ignorados durante a
+   * fala e, no fim, o ouvinte esquece o que ouviu (inclusive as palavras que
+   * uma parcial viva já tinha) e o acompanhamento recomeça dos finais novos.
+   */
   function speakText(text) {
     if (!text || state.speaking) return;
-    const wasListening = listener.active;
-    log('app', `falar "${text}" (microfone ${wasListening ? 'pausado' : 'já desligado'})`);
-    if (wasListening) listener.stop();   // o microfone não deve "ouvir" a própria voz do jogo
+    log('app', `falar "${text}" (microfone ${listener.active ? 'continua ligado, resultados ignorados' : 'desligado'})`);
     state.speaking = true;
     $('#btn-listen').disabled = true;
     setStatus('Ouça com atenção... 🔊');
@@ -432,9 +452,11 @@
       state.speaking = false;
       $('#btn-listen').disabled = false;
       // A voz do jogo que o microfone captou não é tentativa da criança.
+      if (listener.active) listener.reset({ renew: false, why: 'fim da voz do jogo' });
+      if (state.tracker) state.tracker.rebase();
       state.firstVoiceAt = 0;
       state.attemptFrom = Date.now() + 300;
-      if (wasListening) startListening(); else setStatus();
+      setStatus();
     };
     updateEngineLabel();
     SPEECH.speak(text, { gender: VOICES[state.voice].gender, onEnd: done });
@@ -641,7 +663,7 @@
   if (DIAG.enabled) SPEECH.probeLocal();
   // Em modo DEBUG, ?local=available|downloadable|downloading|unavailable força o estado inicial do pacote (para testar a tela).
   const forcedLocal = DIAG.enabled && new URLSearchParams(location.search).get('local');
-  if (SPEECH.supported) setupLocal(forcedLocal || '');
+  if (SPEECH.supported) setupLocal(forcedLocal || '').then(warmUpIfAllowed);
   renderComposer();
   updateMicUI();
   updateEngineLabel();
