@@ -147,7 +147,7 @@ cenários que já travaram.
 | `index.html` | As três telas: compor, ler e fim. |
 | `css/style.css` | Visual (fonte Andika para o texto de leitura). |
 | `js/data.js` | Opções do compositor, com gênero/artigos para a concordância. |
-| `js/story.js` | Gera o texto das 7 páginas e a descrição de cada cena. |
+| `js/story.js` | Gera o texto das 7 páginas e a descrição de cada cena, em 3 variantes que se revezam. |
 | `js/art.js` | Desenha os SVGs: personagens, veículos, cenários, achados e adereços animados. |
 | `js/speech.js` | Reconhecimento de voz contínuo, síntese de voz e comparação tolerante das palavras. |
 | `js/app.js` | Fluxo das telas, destaque das palavras, sons e confete. |
@@ -239,6 +239,14 @@ cenários que já travaram.
 ## Como estender
 
 * Nova opção: adicione em `js/data.js`, desenhe a miniatura/figura em
-  `js/art.js` e, se for diálogo ou final, escreva as frases em `js/story.js`.
-* Os "achados" (animal, objeto, pessoa, criança) têm variantes sorteadas a
-  cada história, então a mesma escolha gera histórias diferentes.
+  `js/art.js` e, se for diálogo ou final, escreva as frases em `js/story.js`
+  (3 versões de cada, uma por variante).
+* As mesmas escolhas geram histórias diferentes: cada página tem **3
+  versões do texto** (`STORY.VARIANTS`), com o jeito de passear
+  (`manners` em `js/data.js`) e a descrição do lugar (`descs`) combinando
+  com a variante, e os "achados" (animal, objeto, pessoa, criança) têm 2 ou
+  3 opções. A variante e o achado se revezam a cada história com as mesmas
+  escolhas (`STORY.rotate`, guardado em `localStorage`), então a criança só
+  vê o mesmo texto de novo depois de 3 histórias iguais (e com outro achado).
+  `STORY.generate(sel, { variant, found })` gera uma versão específica; os
+  testes geram todas (99 000 histórias).

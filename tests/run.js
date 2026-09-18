@@ -22,18 +22,58 @@ function check(label, got, exp) {
 const say = (s) => s.split(/\s+/).map(S.normalize).filter(Boolean);
 const targetsOf = (text) => S.tokenize(text).filter((t) => t.wordIndex !== null).map((t) => t.norm);
 
-/* ---------- histórias e ilustrações: todas as combinações ---------- */
-let stories = 0, problems = 0;
+/* ---------- histórias e ilustrações: todas as combinações × variantes × achados ---------- */
+let stories = 0, problems = 0, same = 0;
 for (const c of D.characters) for (const v of D.vehicles) for (const p of D.places) for (const s of D.situations) for (const d of D.dialogs) for (const e of D.endings) {
-  const story = STORY.generate({ character: c.id, vehicle: v.id, place: p.id, situation: s.id, dialog: d.id, ending: e.id });
-  stories++;
-  if (story.slides.length < 5 || story.slides.length > 8) problems++;
-  for (const sl of story.slides) {
-    if (/undefined|NaN|\[object/.test(sl.text)) { problems++; break; }
-    if (/undefined|NaN/.test(ART.renderScene(sl.scene))) { problems++; break; }
+  const sel = { character: c.id, vehicle: v.id, place: p.id, situation: s.id, dialog: d.id, ending: e.id };
+  const texts = [];
+  for (let k = 0; k < STORY.VARIANTS; k++) for (let fi = 0; fi < s.variants.length; fi++) {
+    const story = STORY.generate(sel, { variant: k, found: fi });
+    stories++;
+    if (story.slides.length !== 7 || story.variant !== k || story.found !== s.variants[fi]) problems++;
+    for (const sl of story.slides) {
+      if (/undefined|NaN|\[object|  /.test(sl.text)) { problems++; break; }
+      if (/undefined|NaN/.test(ART.renderScene(sl.scene))) { problems++; break; }
+    }
+    if (fi === 0) texts.push(story.slides.map((sl) => sl.text));
   }
+  // as 3 variantes das mesmas escolhas mudam o texto de TODAS as páginas
+  for (let i = 0; i < 7; i++) if (new Set(texts.map((t) => t[i])).size !== STORY.VARIANTS) same++;
 }
 check(`${stories} histórias geradas sem problemas`, problems, 0);
+check('as 3 variantes mudam o texto de todas as páginas', same, 0);
+{
+  // concordância: menina + achado feminino
+  const sel = { character: 'menina', vehicle: 'bicicleta', place: 'praia', situation: 'pessoa', dialog: 'pedir_algo', ending: 'amizade' };
+  const st = STORY.generate(sel, { variant: 2, found: 1 });   // senhora
+  check('variante 2, menina: "esperta e curiosa"', /Bia era uma menina esperta e curiosa/.test(st.slides[0].text), true);
+  check('variante 2, senhora: "Obrigada"', /Obrigada, você é muito gentil/.test(st.slides[5].text), true);
+  check('variante 2, amizade feminina: "uma amiga nova"', /uma amiga nova/.test(st.slides[6].text), true);
+  const stJ = STORY.generate({ ...sel, dialog: 'pedir_ajuda' }, { variant: 0, found: 1 });
+  check('duas mulheres: "as duas foram juntas"', /as duas foram juntas/.test(stJ.slides[5].text), true);
+  const stM = STORY.generate({ ...sel, character: 'menino', dialog: 'pedir_ajuda' }, { variant: 0, found: 1 });
+  check('menino e senhora: "os dois foram juntos"', /os dois foram juntos/.test(stM.slides[5].text), true);
+  const st1 = STORY.generate(sel, { variant: 1, found: 0 });
+  check('variante 1: passeio "pedalando"', /Ela foi pedalando, bem animada/.test(st1.slides[1].text), true);
+  check('variante 1: descrição da praia', /Na praia, o mar brilhava/.test(st1.slides[2].text), true);
+  // revezamento: com storage, as variantes e os achados se alternam
+  const mem = {};
+  window.localStorage = { getItem: (k) => (k in mem ? mem[k] : null), setItem: (k, v) => { mem[k] = String(v); } };
+  const seq = []; for (let i = 0; i < 10; i++) seq.push(STORY.rotate(sel));
+  const pairs = seq.slice(0, 9).map((r) => `${r.variant}/${r.found}`);
+  check('revezamento (3 achados): 9 histórias seguidas cobrem todos os pares variante/achado', new Set(pairs).size, 9);
+  check('a 10ª repete a 1ª', `${seq[9].variant}/${seq[9].found}`, pairs[0]);
+  check('duas seguidas nunca repetem a variante', seq.every((r, i) => !i || r.variant !== seq[i - 1].variant), true);
+  check('duas seguidas nunca repetem o achado', seq.every((r, i) => !i || r.found !== seq[i - 1].found), true);
+  const sel2 = { ...sel, situation: 'crianca' };   // 2 achados
+  const seq2 = []; for (let i = 0; i < 7; i++) seq2.push(STORY.rotate(sel2));
+  check('revezamento (2 achados): 6 histórias cobrem os 6 pares', new Set(seq2.slice(0, 6).map((r) => `${r.variant}/${r.found}`)).size, 6);
+  check('achados alternam com 2 opções', seq2.every((r, i) => !i || r.found !== seq2[i - 1].found), true);
+  delete window.localStorage;
+  // sem storage: sorteia dentro dos limites
+  const r = STORY.rotate(sel);
+  check('sem storage: variante válida', r.variant >= 0 && r.variant < STORY.VARIANTS, true);
+}
 let thumbs = 0;
 for (const sec of D.sections) for (const it of sec.items) { const t = ART.thumb(sec.key, it.id); if (t && !/undefined|NaN/.test(t)) thumbs++; }
 check('miniaturas do compositor', thumbs, D.sections.reduce((n, s) => n + s.items.length, 0));
