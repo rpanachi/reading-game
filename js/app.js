@@ -6,7 +6,7 @@
   const $$ = (s) => Array.from(document.querySelectorAll(s));
   const D = window.GAME_DATA;
   const VOICES = { francisca: { label: 'feminina', gender: 'f' }, antonio: { label: 'masculina', gender: 'm' } };
-  const APP_VERSION = '17'; // aparece no rodapé da página de leitura; suba junto com o ?v= do index.html
+  const APP_VERSION = '18'; // aparece no rodapé da página de leitura; suba junto com o ?v= do index.html
   const log = (tag, msg, data) => DIAG.log(tag, msg, data);
   const detail = (tag, msg, data) => DIAG.detail(tag, msg, data);
   const STUCK_MS = 3000;   // palavra sem avanço, com a criança falando: liga o diagnóstico minucioso
@@ -464,10 +464,11 @@
 
   /* ---------- tela 2: leitura ---------- */
   function startStory() {
-    state.story = STORY.generate(state.sel);
+    // As mesmas escolhas rendem uma história diferente a cada vez (revezamento).
+    state.story = STORY.generate(state.sel, STORY.rotate(state.sel));
     state.wordsRead = 0;
     state.startedAt = Date.now();
-    log('história', 'início', { escolhas: state.sel, paginas: state.story.slides.map((s) => s.text) });
+    log('história', 'início', { escolhas: state.sel, variante: state.story.variant, achado: state.story.found.id, paginas: state.story.slides.map((s) => s.text) });
     showScreen('read');
     goToSlide(0);
     // Escutar é o padrão ao abrir a história; se o microfone falhar, o

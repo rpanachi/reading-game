@@ -13,20 +13,28 @@ window.GAME_DATA = (function () {
     { id: 'galinha',  label: 'Galinha',  name: 'Lili', species: 'galinha',  gender: 'f', indef: 'uma galinha', pronoun: 'ela', color: '#fff3e0' },
   ];
 
+  // manners: jeitos de dizer o passeio, um por variante da história
+  // ("passear ...", "foi ... até o parque", "voltou para casa ...").
   const vehicles = [
-    { id: 'ape',       label: 'A pé',       phrase: 'a pé' },
-    { id: 'bicicleta', label: 'Bicicleta',  phrase: 'de bicicleta' },
-    { id: 'patins',    label: 'Patins',     phrase: 'de patins' },
-    { id: 'skate',     label: 'Skate',      phrase: 'de skate' },
-    { id: 'patinete',  label: 'Patinete',   phrase: 'de patinete' },
+    { id: 'ape',       label: 'A pé',       phrase: 'a pé',         manners: ['a pé', 'caminhando', 'andando devagar'] },
+    { id: 'bicicleta', label: 'Bicicleta',  phrase: 'de bicicleta', manners: ['de bicicleta', 'pedalando', 'na sua bicicleta'] },
+    { id: 'patins',    label: 'Patins',     phrase: 'de patins',    manners: ['de patins', 'deslizando de patins', 'com os patins'] },
+    { id: 'skate',     label: 'Skate',      phrase: 'de skate',     manners: ['de skate', 'no seu skate', 'andando de skate'] },
+    { id: 'patinete',  label: 'Patinete',   phrase: 'de patinete',  manners: ['de patinete', 'no seu patinete', 'com o patinete'] },
   ];
 
+  // descs: descrições do lugar, uma por variante da história.
   const places = [
-    { id: 'parque',   label: 'Parque',   to: 'até o parque',   at: 'no parque',   desc: 'O parque tinha árvores verdes e um lago azul.' },
-    { id: 'floresta', label: 'Floresta', to: 'até a floresta', at: 'na floresta', desc: 'A floresta era cheia de árvores altas e passarinhos.' },
-    { id: 'escola',   label: 'Escola',   to: 'até a escola',   at: 'na escola',   desc: 'A escola tinha um pátio grande e muito colorido.' },
-    { id: 'festa',    label: 'Festa',    to: 'até a festa',    at: 'na festa',    desc: 'A festa tinha balões, bolo e muita música.' },
-    { id: 'praia',    label: 'Praia',    to: 'até a praia',    at: 'na praia',    desc: 'A praia tinha areia quente e ondas azuis.' },
+    { id: 'parque',   label: 'Parque',   to: 'até o parque',   at: 'no parque',   desc: 'O parque tinha árvores verdes e um lago azul.',
+      descs: ['O parque tinha árvores verdes e um lago azul.', 'No parque havia balanços, flores e muitos passarinhos.', 'O parque estava cheio de crianças brincando e cachorros correndo.'] },
+    { id: 'floresta', label: 'Floresta', to: 'até a floresta', at: 'na floresta', desc: 'A floresta era cheia de árvores altas e passarinhos.',
+      descs: ['A floresta era cheia de árvores altas e passarinhos.', 'Na floresta, o vento balançava as folhas e os pássaros cantavam.', 'A floresta tinha um caminho de pedras e cogumelos coloridos.'] },
+    { id: 'escola',   label: 'Escola',   to: 'até a escola',   at: 'na escola',   desc: 'A escola tinha um pátio grande e muito colorido.',
+      descs: ['A escola tinha um pátio grande e muito colorido.', 'Na escola, as salas estavam cheias de desenhos e livros.', 'A escola tinha um jardim com flores e um parquinho.'] },
+    { id: 'festa',    label: 'Festa',    to: 'até a festa',    at: 'na festa',    desc: 'A festa tinha balões, bolo e muita música.',
+      descs: ['A festa tinha balões, bolo e muita música.', 'Na festa, todos usavam chapéus coloridos e dançavam.', 'A festa tinha docinhos, luzes e um bolo enorme.'] },
+    { id: 'praia',    label: 'Praia',    to: 'até a praia',    at: 'na praia',    desc: 'A praia tinha areia quente e ondas azuis.',
+      descs: ['A praia tinha areia quente e ondas azuis.', 'Na praia, o mar brilhava e as gaivotas voavam.', 'A praia tinha conchas, castelos de areia e um sol quentinho.'] },
   ];
 
   // Cada situação tem variantes sorteadas na hora de gerar a história.
